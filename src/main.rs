@@ -11,6 +11,7 @@ use futures::future::join_all;
 use std::sync::Arc;
 use parking_lot::RwLock;
 use dashmap::DashMap;
+use clap::{App, SubCommand, Arg};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +77,6 @@ pub struct ScalingConfig {
     #[serde(default)]
     scale_down_cooldown: u64,
 }
-
 struct DockerManager;
 
 impl DockerManager {
@@ -84,127 +84,107 @@ impl DockerManager {
         DockerManager
     }
 
-    fn launch_docker_desktop(&self) -> io::Result<()> {
-        println!("{}", GradientText::cyber("🚀 Launching Docker Desktop..."));
-        
+    fn verify_and_setup_docker(&self) -> io::Result<()> {
+        println!("🔍 Checking Docker installation...");
+
+        // First check if Docker is installed
+        match Command::new("docker").arg("--version").output() {
+            Ok(_) => {
+                println!("✅ Docker is installed");
+                
+                // Then check if Docker is running
+                match Command::new("docker").arg("info").output() {
+                    Ok(_) => {
+                        println!("✅ Docker is running");
+                        Ok(())
+                    }
+                    Err(_) => {
+                        println!("⏳ Starting Docker...");
+                        self.start_docker()?;
+                        Ok(())
+                    }
+                }
+            }
+            Err(_) => {
+                println!("❌ Docker not found. Installing Docker...");
+                self.install_docker()?;
+                println!("⏳ Starting Docker for first time...");
+                self.start_docker()?;
+                Ok(())
+            }
+        }
+    }
+
+    fn start_docker(&self) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
-            Command::new("open")
-                .args(["-a", "Docker"])
-                .output()?;
+            Command::new("open").args(["-a", "Docker"]).status()?;
         }
 
-        #[cfg(target_os = "windows")]
+        #[cfg(target_os = "windows")] 
         {
             Command::new("cmd")
                 .args(["/C", "start", "\"\"", "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\""])
-                .output()?;
+                .status()?;
         }
 
         #[cfg(target_os = "linux")]
         {
-            Command::new("systemctl")
-                .args(["--user", "start", "docker-desktop"])
-                .output()?;
+            Command::new("systemctl").args(["--user", "start", "docker"]).status()?;
         }
 
-        // Wait for Docker Desktop to start
-        println!("⏳ Waiting for Docker Desktop to start...");
-        for i in 0..30 {
-            if i > 0 {
-                thread::sleep(Duration::from_secs(2));
-            }
-
+        // Wait for Docker to be ready
+        println!("⏳ Waiting for Docker to start...");
+        for _ in 0..30 {
             match Command::new("docker").arg("info").output() {
-                Ok(output) if output.status.success() => {
-                    println!("\n✅ Docker Desktop is running!");
+                Ok(_) => {
+                    println!("✅ Docker is now running!");
                     return Ok(());
                 }
-                _ if i == 29 => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Docker Desktop failed to start after 60 seconds"
-                    ));
-                }
-                _ => {
+                Err(_) => {
+                    thread::sleep(Duration::from_secs(2));
                     print!(".");
                     io::stdout().flush()?;
                 }
             }
         }
 
-        Ok(())
+        Err(io::Error::new(io::ErrorKind::Other, "Docker failed to start"))
     }
 
-    fn verify_and_setup_docker(&self) -> io::Result<()> {
-        println!("{}", GradientText::cyber("🔍 Checking Docker installation..."));
-        
-        match Command::new("docker").arg("--version").output() {
-            Ok(output) if output.status.success() => {
-                let version = String::from_utf8_lossy(&output.stdout);
-                println!("{} {}", 
-                    GradientText::success("✅ Docker installed:"),
-                    GradientText::info(&version.trim())
-                );
-                
-                match Command::new("docker").arg("info").output() {
-                    Ok(output) if output.status.success() => {
-                        println!("{}", GradientText::success("✅ Docker Desktop is running"));
-                    }
-                    _ => {
-                        println!("{}", GradientText::warning("⏳ Docker Desktop is not running. Attempting to start..."));
-                        self.launch_docker_desktop()?;
-                    }
-                }
-            }
-            _ => {
-                println!("{}", GradientText::error("❌ Docker is not installed"));
-                self.install_docker()?;
+    fn stop_docker(&self) -> io::Result<()> {
+        println!("Stopping Docker...");
 
-                println!("🚀 Starting Docker Desktop for the first time...");
-                self.launch_docker_desktop()?;
-                // Pull some common images in advance
-                println!("📥 Pulling common Docker images...");
-                let common_images = [
-                    "node:18-alpine",
-                    "oven/bun:latest",
-                    "nginx:alpine",
-                    "mongo:latest",
-                    "postgres:alpine"
-                ];
-                
-                for image in common_images.iter() {
-                    print!("Pulling {}... ", image);
-                    io::stdout().flush()?;
-                    match Command::new("docker")
-                        .args(["pull", image])
-                        .output() {
-                            Ok(_) => println!("✅"),
-                            Err(_) => println!("❌"),
-                        }
-                }
-            }
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("osascript")
+                .args(["-e", "quit app \"Docker\""])
+                .status()?;
         }
 
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("taskkill")
+                .args(["/IM", "Docker Desktop.exe", "/F"])
+                .status()?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Command::new("systemctl")
+                .args(["--user", "stop", "docker"])
+                .status()?;
+        }
+
+        println!("✅ Docker stopped");
         Ok(())
     }
 
     fn install_docker(&self) -> io::Result<()> {
-        println!("🐳 Docker Desktop is not installed. Starting installation process...");
+        println!("📥 Installing Docker...");
 
         #[cfg(target_os = "macos")]
         {
-            // Check if Homebrew is installed
-            if Command::new("brew").arg("--version").output().is_err() {
-                println!("📦 Installing Homebrew first...");
-                let brew_install = r#"/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)""#;
-                Command::new("bash")
-                    .arg("-c")
-                    .arg(brew_install)
-                    .status()?;
-            }
-
-            println!("📥 Installing Docker Desktop via Homebrew...");
             Command::new("brew")
                 .args(["install", "--cask", "docker"])
                 .status()?;
@@ -212,325 +192,224 @@ impl DockerManager {
 
         #[cfg(target_os = "windows")]
         {
-            println!("📥 Downloading Docker Desktop Installer...");
             let installer_url = "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe";
             Command::new("powershell")
                 .args([
                     "-Command",
-                    &format!("Invoke-WebRequest '{}' -OutFile 'DockerDesktopInstaller.exe'", installer_url)
+                    &format!("Invoke-WebRequest '{}' -OutFile 'DockerInstaller.exe'", installer_url)
                 ])
                 .status()?;
 
-            println!("🔧 Installing Docker Desktop...");
-            Command::new("DockerDesktopInstaller.exe")
+            Command::new("DockerInstaller.exe")
                 .args(["install", "--quiet"])
                 .status()?;
 
-            // Cleanup installer
-            let _ = fs::remove_file("DockerDesktopInstaller.exe");
+            fs::remove_file("DockerInstaller.exe")?;
         }
 
         #[cfg(target_os = "linux")]
         {
-            println!("📥 Installing Docker on Linux...");
-            
-            // Update package list
             Command::new("sudo")
                 .args(["apt-get", "update"])
                 .status()?;
 
-            // Install prerequisites
             Command::new("sudo")
-                .args([
-                    "apt-get", "install", "-y",
-                    "ca-certificates", "curl", "gnupg", "lsb-release"
-                ])
+                .args(["apt-get", "install", "-y", "docker.io"])
                 .status()?;
 
-            // Add Docker's official GPG key
-            println!("🔑 Adding Docker's GPG key...");
-            Command::new("bash")
-                .arg("-c")
-                .arg("curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg")
+            Command::new("sudo")
+                .args(["systemctl", "enable", "docker"])
                 .status()?;
 
-            // Set up the stable repository
-            println!("📦 Setting up Docker repository...");
-            let repo_command = r#"echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null"#;
-            Command::new("bash")
-                .arg("-c")
-                .arg(repo_command)
-                .status()?;
-
-            // Install Docker Engine
-            println!("🔧 Installing Docker Engine...");
-            Command::new("sudo")
-                .args(["apt-get", "update"])
-                .status()?;
-            Command::new("sudo")
-                .args([
-                    "apt-get", "install", "-y",
-                    "docker-ce", "docker-ce-cli", "containerd.io"
-                ])
-                .status()?;
-
-            // Add user to docker group
-            println!("👤 Adding current user to docker group...");
-            Command::new("sudo")
+            Command::new("sudo") 
                 .args(["usermod", "-aG", "docker", &whoami::username()])
                 .status()?;
         }
 
-        println!("✅ Docker installation completed!");
-        println!("⚠️  You may need to restart your computer for all changes to take effect.");
-        
-        // Ask user if they want to restart now
-        print!("Would you like to restart now? [y/N]: ");
-        io::stdout().flush()?;
-        
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        
-        if input.trim().to_lowercase() == "y" {
-            println!("🔄 Restarting system please wait...");
-            #[cfg(target_os = "macos")]
-            Command::new("sudo")
-                .args(["shutdown", "-r", "now"])
-                .status()?;
-
-            #[cfg(target_os = "windows")]
-            Command::new("shutdown")
-                .args(["/r", "/t", "0"])
-                .status()?;
-
-            #[cfg(target_os = "linux")]
-            Command::new("sudo")
-                .args(["reboot"])
-                .status()?;
-        }
-
+        println!("✅ Docker installed successfully");
+        println!("⚠️  You may need to restart your system");
         Ok(())
     }
 
-    // Add other Docker-related methods here...
+    fn launch_docker_desktop(&self) -> io::Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open")
+                .args(["-a", "Docker"])
+                .status()?;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("cmd")
+                .args(["/C", "start", "\"\"", "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\""])
+                .status()?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            Command::new("systemctl")
+                .args(["--user", "start", "docker"])
+                .status()?;
+        }
+
+        // Wait for Docker to be ready
+        println!("⏳ Waiting for Docker Desktop to start...");
+        for _ in 0..30 {
+            match Command::new("docker").arg("info").output() {
+                Ok(_) => {
+                    println!("✅ Docker Desktop is now running!");
+                    return Ok(());
+                }
+                Err(_) => {
+                    thread::sleep(Duration::from_secs(2));
+                    print!(".");
+                    io::stdout().flush()?;
+                }
+            }
+        }
+
+        Err(io::Error::new(io::ErrorKind::Other, "Docker Desktop failed to start"))
+    }
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    
-    match args.get(1).map(String::as_str) {
-        Some("deploy") => {
-            if args.len() < 8 {
-                eprintln!("Usage: rust-dockerize deploy --app <app-name> --type <app-type> --port <port> [--k8s] [--replicas <count>] [--namespace <name>] [--mode <dev|prod>]");
-                return;
-            }
-            let k8s_enabled = args.contains(&String::from("--k8s"));
-            let mode = args.iter()
-                .position(|x| x == "--mode")
-                .and_then(|i| args.get(i + 1))
-                .map(String::as_str)
-                .unwrap_or("dev");
+    let app = App::new("rustify")
+        .version("0.1.0")
+        .author("Harshit Duggal")
+        .about("🚀 Ultra-optimized deployment CLI")
+        .subcommand(SubCommand::with_name("init")
+            .about("Initialize project")
+            .arg(Arg::with_name("type")
+                .long("type")
+                .value_name("TYPE")
+                .help("Project type (default: bun)")
+                .takes_value(true)))
+        .subcommand(SubCommand::with_name("deploy")
+            .about("Deploy application")
+            .arg(Arg::with_name("prod")
+                .long("prod")
+                .help("Deploy in production mode"))
+            .arg(Arg::with_name("port")
+                .long("port")
+                .value_name("PORT")
+                .help("Custom port (default: 8000)"))
+            .arg(Arg::with_name("rpl")
+                .long("rpl")
+                .help("Enable auto-scaling replicas")))
+        .get_matches();
 
-            let replicas = if mode == "prod" {
-                args.iter()
-                    .position(|x| x == "--replicas")
-                    .and_then(|i| args.get(i + 1))
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(3) // Default to 3 replicas in production
-            } else {
-                1 // Single replica in dev mode
+    match app.subcommand() {
+        Some(("init", matches)) => {
+            let project_type = matches.value_of("type").unwrap_or("bun");
+            if let Err(e) = initialize_project(project_type) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(("deploy", matches)) => {
+            let is_prod = matches.is_present("prod");
+            let port = matches.value_of("port").unwrap_or("8000");
+            let auto_scale = matches.is_present("rpl");
+            
+            // Create metadata
+            let mut metadata = AppMetadata {
+                app_name: "app".to_string(),
+                app_type: "bun".to_string(),
+                port: port.to_string(),
+                created_at: Local::now().to_rfc3339(),
+                container_id: None,
+                status: String::from("pending"),
+                kubernetes_enabled: is_prod,
+                kubernetes_metadata: KubernetesMetadata {
+                    namespace: if is_prod { "production" } else { "development" }.to_string(),
+                    deployment_name: "app-deployment".to_string(),
+                    service_name: "app-service".to_string(),
+                    replicas: if auto_scale { 3 } else { 1 },
+                    pod_status: vec![],
+                    ingress_host: None,
+                },
+                performance_metrics: PerformanceMetrics::default(),
+                scaling_config: ScalingConfig::default(),
             };
 
-            let namespace = args.iter()
-                .position(|x| x == "--namespace")
-                .and_then(|i| args.get(i + 1))
-                .unwrap_or(&String::from(if mode == "prod" { "production" } else { "development" }))
-                .to_string();
-
-            if let Err(e) = deploy_app(&args, k8s_enabled, replicas, &namespace, mode) {
+            // Keep all the powerful infrastructure logic
+            if let Err(e) = deploy_application(&mut metadata, is_prod, auto_scale) {
                 eprintln!("Error: {}", e);
-            }
-        }
-        Some("check") => {
-            println!("🔍 Checking infrastructure status...");
-            if let Err(e) = verify_infrastructure() {
-                eprintln!("❌ Infrastructure check failed: {}", e);
-            }
-        }
-        Some("cleanup") => {
-            if let Err(e) = cleanup_deployment() {
-                eprintln!("Error during cleanup: {}", e);
-            }
-        }
-        Some("status") => {
-            if let Err(e) = check_kubernetes_status() {
-                eprintln!("Error checking status: {}", e);
+                std::process::exit(1);
             }
         }
         _ => {
-            eprintln!("Usage:");
-            eprintln!("  rust-dockerize deploy --app <app-name> --type <app-type> --port <port> [--k8s] [--replicas <count>] [--namespace <name>] [--mode <dev|prod>]");
-            eprintln!("  rust-dockerize check");
-            eprintln!("  rust-dockerize cleanup");
-            eprintln!("  rust-dockerize status");
+            println!("Usage:");
+            println!("  rustify init [--type <type>]");
+            println!("  rustify deploy [--prod] [--port <port>] [--rpl]");
         }
     }
 }
-fn deploy_app(args: &[String], k8s_enabled: bool, replicas: i32, namespace: &str, mode: &str) -> io::Result<()> {
-    let metadata = AppMetadata {
-        app_name: args[3].clone(),
-        app_type: args[5].clone(), 
-        port: args[7].clone(),
-        created_at: Local::now().to_rfc3339(),
-        container_id: None,
-        status: String::from("pending"),
-        kubernetes_enabled: k8s_enabled,
-        kubernetes_metadata: KubernetesMetadata {
-            namespace: namespace.to_string(),
-            deployment_name: format!("{}-deployment", args[3]),
-            service_name: format!("{}-service", args[3]), 
-            replicas,
-            pod_status: vec![],
-            ingress_host: None,
-        },
-        performance_metrics: PerformanceMetrics::default(),
-        scaling_config: ScalingConfig::default(),
-    };
-    
-    println!("🚀 Starting deployment process for {} ({})", metadata.app_name, metadata.app_type);
-    
-    // Create Docker manager instance and verify setup
+
+fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
+    // 1. Verify Docker setup
     let docker_manager = DockerManager::new();
     docker_manager.verify_and_setup_docker()?;
-    
-    let current_dir = env::current_dir()?;
-    println!("📂 Working directory: {}", current_dir.display());
-    // Initialize metadata 
-    let mut metadata = metadata;
 
-    // Detect project structure and framework
-    fn detect_project_structure(dir: &Path) -> io::Result<(String, String)> {
-        let mut app_type = String::from("unknown");
-        let mut entry_point = String::from("src/main.rs");
+    // 2. Create necessary files
+    create_app_files(&metadata.app_type, &metadata.port, "src/index.js")?;
 
-        // Check for package.json
-        let package_json_path = dir.join("package.json");
-        if package_json_path.exists() {
-            let contents = fs::read_to_string(package_json_path)?;
-            if contents.contains("\"next\"") {
-                app_type = String::from("nextjs");
-                entry_point = String::from("pages/index.js");
-            } else if contents.contains("\"react\"") {
-                app_type = String::from("react"); 
-                entry_point = String::from("src/index.js");
-            } else if contents.contains("\"@remix-run/react\"") {
-                app_type = String::from("remix");
-                entry_point = String::from("app/root.tsx");
-            }
-        }
-
-        // Check for Cargo.toml
-        let cargo_toml_path = dir.join("Cargo.toml");
-        if cargo_toml_path.exists() {
-            app_type = String::from("rust");
-            entry_point = String::from("src/main.rs");
-        }
-
-        Ok((app_type, entry_point))
-    }
-
-    let (detected_app_type, entry_point) = detect_project_structure(&current_dir)?;
-    let app_type = if detected_app_type != "unknown" { &detected_app_type } else { &metadata.app_type };
-
-    // Create necessary files
-    create_app_files(app_type, &metadata.port, &entry_point)?;
-    
-    // Initialize performance monitoring
+    // 3. Initialize monitoring and infrastructure
     let metrics = Arc::new(RwLock::new(PerformanceMetrics::default()));
     let cache = Arc::new(DashMap::new());
-    // Create async runtime for concurrent operations
+    
     let rt = Runtime::new()?;
     rt.block_on(async {
+        // Store the values we need before the immutable borrow
         let app_name = metadata.app_name.clone();
         let namespace = metadata.kubernetes_metadata.namespace.clone();
-        let mode = metadata.status.clone();
-        
-        let futures = vec![
-            tokio::spawn({
-                let app_name = app_name.clone();
-                let namespace = namespace.clone();
-                let mode = mode.clone();
-                async move { setup_monitoring(&app_name, &namespace, &mode) }
-            }),
-            tokio::spawn({
-                let cache = cache.clone();
-                async move { setup_caching(cache).await }
-            }),
-            tokio::spawn({
-                let mode = mode.clone();
-                async move { setup_load_balancing(&mode).await }
-            }),
-        ];
+        let app_type = metadata.app_type.clone();
+        let port = metadata.port.clone();
 
-        // Handle the results properly
-        for result in join_all(futures).await {
-            match result {
-                Ok(_) => (),
-                Err(e) => eprintln!("Task error: {}", e),
-            }
-        }
-        
+        let monitoring = setup_monitoring(&app_name, &namespace, "active").await.map_err::<io::Error, _>(|e| e.into())?;
+        let caching = setup_caching(cache.clone()).await.map_err::<io::Error, _>(|e| e.into())?;
+        let load_balancing = setup_load_balancing("prod").await.map_err::<io::Error, _>(|e| e.into())?;
+
         Ok::<(), io::Error>(())
     })?;
 
-    fn optimize_for_framework(app_type: &str, mode: &str) -> io::Result<()> {
-        match app_type {
-            "nextjs" => {
-                if mode == "prod" {
-                    // Production optimizations for Next.js
-                    println!("Applying Next.js production optimizations...");
-                    Command::new("npm")
-                        .args(&["run", "build"])
-                        .status()?;
-                }
-            }
-            "react" => {
-                if mode == "prod" {
-                    // Production optimizations for React
-                    println!("Applying React production optimizations...");
-                    Command::new("npm")
-                        .args(&["run", "build"])
-                        .status()?;
-                }
-            }
-            "remix" => {
-                if mode == "prod" {
-                    // Production optimizations for Remix
-                    println!("Applying Remix production optimizations...");
-                    Command::new("npm")
-                        .args(&["run", "build"])
-                        .status()?;
-                }
-            }
-            _ => println!("No specific optimizations for framework: {}", app_type),
-        }
-        Ok(())
+    if is_prod {
+        // Store the values we need before using them
+        let app_name = metadata.app_name.clone();
+        let app_type = metadata.app_type.clone();
+        let port = metadata.port.clone();
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+
+        // 4. Deploy to Kubernetes with all optimizations
+        deploy_to_kubernetes(
+            metadata,
+            &app_name,
+            &app_type, 
+            &port,
+            if auto_scale { 3 } else { 1 },
+            &namespace,
+            "prod"
+        )?;
+
+        // 5. Setup HAProxy
+        deploy_haproxy(&namespace)?;
+    } else {
+        // 6. Deploy with Docker for development
+        let dockerfile = generate_dockerfile(&metadata.app_type);
+        fs::write("Dockerfile", dockerfile)?;
+        
+        let compose = generate_docker_compose(&metadata.app_name, &metadata.port);
+        fs::write("docker-compose.yml", compose)?;
+
+        Command::new("docker-compose")
+            .args(["up", "-d"])
+            .status()?;
     }
 
-    // Framework-specific optimizations
-    optimize_for_framework(app_type, mode)?;
-
-    // Generate and write Dockerfile
-    println!("📝 Generating Dockerfile...");
-    let package_json = r#"{
-        "next": "^13.4.12",
-        "react": "^18.2.0", 
-        "react-dom": "^18.2.0"
-    }"#;
-    fs::write("package.json", package_json)?;
+    println!("✅ Deployment successful!");
     Ok(())
 }
-
 fn create_nextjs_files(port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "nextjs-app",
@@ -1108,10 +987,14 @@ fn deploy_to_kubernetes(
     // Generate and apply Kubernetes manifests
     generate_kubernetes_manifests(app_name, app_type, port, replicas, namespace, mode)?;
     apply_kubernetes_manifests(namespace)?;
-
+    
     // Set up monitoring and advanced networking
-    setup_monitoring(app_name, namespace, mode)?;
-    setup_network_policies(app_name, namespace)?;
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        setup_monitoring(app_name, namespace, mode).await?;
+        let _ = setup_network_policies(app_name, namespace);
+        Ok::<(), io::Error>(())
+    })?;
 
     // Configure auto-scaling
     if mode == "prod" {
@@ -1121,7 +1004,7 @@ fn deploy_to_kubernetes(
     // Wait for deployment
     wait_for_kubernetes_deployment(&metadata.kubernetes_metadata.deployment_name, namespace)?;
 
-    // Update status
+    // Update status 
     update_pod_status(metadata, namespace)?;
 
     println!("{}", GradientText::success("✅ Kubernetes deployment completed successfully!"));
@@ -1143,7 +1026,7 @@ fn verify_docker_installation() -> io::Result<()> {
                     println!("{}", GradientText::success("✅ Docker Desktop is running"));
                 }
                 _ => {
-                    println!("{}", GradientText::warning("⏳ Docker Desktop is not running. Attempting to start..."));
+                    println!("{}", GradientText::warning("⏳ Docker Desktop is not running.🥲 Attempting to start..."));
                     let docker_manager = DockerManager::new();
                     docker_manager.launch_docker_desktop()?;
                 }
@@ -1331,7 +1214,6 @@ fn apply_kubernetes_manifests(namespace: &str) -> io::Result<()> {
 
     Ok(())
 }
-
 fn wait_for_kubernetes_deployment(deployment_name: &str, namespace: &str) -> io::Result<()> {
     println!("⏳ Waiting for deployment to be ready...");
     
@@ -1572,7 +1454,7 @@ spec:
     Ok(())
 }
 
-fn setup_monitoring(app_name: &str, namespace: &str, mode: &str) -> io::Result<()> {
+async fn setup_monitoring(app_name: &str, namespace: &str, mode: &str) -> io::Result<()> {
     // Configure Prometheus monitoring
     let monitoring_config = format!(
         r#"apiVersion: monitoring.coreos.com/v1
@@ -1987,4 +1869,31 @@ fn default_min_instances() -> u32 {
 
 fn default_max_instances() -> u32 {
     5
+}
+
+fn initialize_project(project_type: &str) -> io::Result<()> {
+    println!("{}", GradientText::cyber("🚀 Initializing project..."));
+    
+    // Create necessary directories
+    fs::create_dir_all("src")?;
+    
+    // Create app files based on project type
+    create_app_files(project_type, "3000", "src/index.js")?;
+    
+    // Initialize git if not already initialized
+    if !Path::new(".git").exists() {
+        Command::new("git")
+            .args(["init"])
+            .output()?;
+            
+        // Create default .gitignore
+        let gitignore = r#"node_modules/
+dist/
+.env
+.DS_Store"#;
+        fs::write(".gitignore", gitignore)?;
+    }
+    
+    println!("{}", GradientText::success("✅ Project initialized successfully!"));
+    Ok(())
 }
