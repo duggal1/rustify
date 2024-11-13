@@ -15,13 +15,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            cross: false
           - os: macos-latest
             target: x86_64-apple-darwin
-            cross: false
           - os: macos-latest
             target: aarch64-apple-darwin
-            cross: true
 
     steps:
     - uses: actions/checkout@v2
@@ -31,14 +28,18 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y pkg-config libssl-dev
+        echo "OPENSSL_DIR=/usr" >> $GITHUB_ENV
+        echo "OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+        echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
 
     - name: Install dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
         brew install openssl@3
-        echo 'export OPENSSL_DIR=$(brew --prefix openssl@3)' >> $GITHUB_ENV
-        echo 'export OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include' >> $GITHUB_ENV
-        echo 'export OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib' >> $GITHUB_ENV
+        OPENSSL_ROOT=$(brew --prefix openssl@3)
+        echo "OPENSSL_DIR=$OPENSSL_ROOT" >> $GITHUB_ENV
+        echo "OPENSSL_LIB_DIR=$OPENSSL_ROOT/lib" >> $GITHUB_ENV
+        echo "OPENSSL_INCLUDE_DIR=$OPENSSL_ROOT/include" >> $GITHUB_ENV
         
     - name: Install Rust
       uses: actions-rs/toolchain@v1
@@ -47,25 +48,34 @@ jobs:
         target: ${{ matrix.target }}
         override: true
 
-    - name: Install cross-compilation tools
-      if: matrix.cross
+    - name: Setup cross-compilation
+      if: matrix.target == 'aarch64-apple-darwin'
       run: |
-        rustup target add ${{ matrix.target }}
+        rustup target add aarch64-apple-darwin
         
     - name: Build
       env:
         OPENSSL_DIR: ${{ env.OPENSSL_DIR }}
-        OPENSSL_INCLUDE_DIR: ${{ env.OPENSSL_INCLUDE_DIR }}
         OPENSSL_LIB_DIR: ${{ env.OPENSSL_LIB_DIR }}
+        OPENSSL_INCLUDE_DIR: ${{ env.OPENSSL_INCLUDE_DIR }}
         MACOSX_DEPLOYMENT_TARGET: '10.15'
       run: |
+        # Print environment for debugging
+        echo "OPENSSL_DIR: $OPENSSL_DIR"
+        echo "OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR"
+        echo "OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+        
         cargo build --release --target ${{ matrix.target }}
         
-    - name: Prepare binary
+    - name: Package Binary
       run: |
         cd target/${{ matrix.target }}/release
         chmod +x rustify
-        tar czf ../../../rustify-${{ matrix.target }}.tar.gz rustify
+        # Create a proper gzipped tar archive
+        tar -czf ../../../rustify-${{ matrix.target }}.tar.gz rustify
+        cd ../../..
+        # Verify the archive
+        tar -tvf rustify-${{ matrix.target }}.tar.gz
       
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
