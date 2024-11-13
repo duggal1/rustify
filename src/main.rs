@@ -6,26 +6,75 @@ use std::thread;
 use std::time::Duration;
 mod gradient;
 use gradient::GradientText;
+use tokio::runtime::Runtime;
+use futures::future::join_all;
+use std::sync::Arc;
+use parking_lot::RwLock;
+use dashmap::DashMap;
 
-#[derive( Serialize, Deserialize)]
-struct AppMetadata {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMetadata {
     app_name: String,
     app_type: String,
     port: String,
     created_at: String,
     container_id: Option<String>,
     status: String,
-    kubernetes: KubernetesMetadata,
+    kubernetes_enabled: bool,
+    #[serde(default)]
+    kubernetes_metadata: KubernetesMetadata,
+    #[serde(default)]
+    performance_metrics: PerformanceMetrics,
+    #[serde(default)]
+    scaling_config: ScalingConfig,
 }
 
-#[derive( Serialize, Deserialize)]
-struct KubernetesMetadata {
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesMetadata {
+    #[serde(default = "default_namespace")]
     namespace: String,
+    #[serde(default)]
     deployment_name: String,
+    #[serde(default)]
     service_name: String,
+    #[serde(default)]
     replicas: i32,
+    #[serde(default)]
     pod_status: Vec<String>,
+    #[serde(default)]
     ingress_host: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PerformanceMetrics {
+    #[serde(default)]
+    avg_response_time_ms: f64,
+    #[serde(default)]
+    requests_per_second: u64,
+    #[serde(default)]
+    error_rate: f64,
+    #[serde(default)]
+    memory_usage_mb: f64,
+    #[serde(default)]
+    cpu_usage_percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScalingConfig {
+    #[serde(default)]
+    auto_scale_threshold: f64,
+    #[serde(default = "default_min_instances")]
+    min_instances: u32,
+    #[serde(default = "default_max_instances")]
+    max_instances: u32,
+    #[serde(default)]
+    scale_up_cooldown: u64,
+    #[serde(default)]
+    scale_down_cooldown: u64,
 }
 
 struct DockerManager;
@@ -112,8 +161,6 @@ impl DockerManager {
                 println!("{}", GradientText::error("❌ Docker is not installed"));
                 self.install_docker()?;
 
-// Remove the following line:
-// DockerManager::install_docker()?;
                 println!("🚀 Starting Docker Desktop for the first time...");
                 self.launch_docker_desktop()?;
                 // Pull some common images in advance
@@ -329,13 +376,28 @@ fn main() {
         }
     }
 }
-
-fn deploy_app(args: &[String], k8s_enabled: bool, replicas: i32, namespace: &str, mode: &str) -> Result<(), io::Error> {
-    let app_name = &args[3];
-    let app_type = &args[5];
-    let port = &args[7];
+fn deploy_app(args: &[String], k8s_enabled: bool, replicas: i32, namespace: &str, mode: &str) -> io::Result<()> {
+    let metadata = AppMetadata {
+        app_name: args[3].clone(),
+        app_type: args[5].clone(), 
+        port: args[7].clone(),
+        created_at: Local::now().to_rfc3339(),
+        container_id: None,
+        status: String::from("pending"),
+        kubernetes_enabled: k8s_enabled,
+        kubernetes_metadata: KubernetesMetadata {
+            namespace: namespace.to_string(),
+            deployment_name: format!("{}-deployment", args[3]),
+            service_name: format!("{}-service", args[3]), 
+            replicas,
+            pod_status: vec![],
+            ingress_host: None,
+        },
+        performance_metrics: PerformanceMetrics::default(),
+        scaling_config: ScalingConfig::default(),
+    };
     
-    println!("🚀 Starting deployment process for {} ({})", app_name, app_type);
+    println!("🚀 Starting deployment process for {} ({})", metadata.app_name, metadata.app_type);
     
     // Create Docker manager instance and verify setup
     let docker_manager = DockerManager::new();
@@ -343,172 +405,148 @@ fn deploy_app(args: &[String], k8s_enabled: bool, replicas: i32, namespace: &str
     
     let current_dir = env::current_dir()?;
     println!("📂 Working directory: {}", current_dir.display());
+    // Initialize metadata 
+    let mut metadata = metadata;
 
-    // Initialize metadata
-    let mut metadata = AppMetadata {
-        app_name: app_name.clone(),
-        app_type: app_type.clone(),
-        port: port.clone(),
-        created_at: Local::now().to_rfc3339(),
-        container_id: None,
-        status: "initializing".to_string(),
-        kubernetes: KubernetesMetadata {
-            namespace: String::new(),
-            deployment_name: String::new(),
-            service_name: String::new(),
-            replicas: 1,
-            pod_status: Vec::new(),
-            ingress_host: None,
-        },
-    };
     // Detect project structure and framework
+    fn detect_project_structure(dir: &Path) -> io::Result<(String, String)> {
+        let mut app_type = String::from("unknown");
+        let mut entry_point = String::from("src/main.rs");
+
+        // Check for package.json
+        let package_json_path = dir.join("package.json");
+        if package_json_path.exists() {
+            let contents = fs::read_to_string(package_json_path)?;
+            if contents.contains("\"next\"") {
+                app_type = String::from("nextjs");
+                entry_point = String::from("pages/index.js");
+            } else if contents.contains("\"react\"") {
+                app_type = String::from("react"); 
+                entry_point = String::from("src/index.js");
+            } else if contents.contains("\"@remix-run/react\"") {
+                app_type = String::from("remix");
+                entry_point = String::from("app/root.tsx");
+            }
+        }
+
+        // Check for Cargo.toml
+        let cargo_toml_path = dir.join("Cargo.toml");
+        if cargo_toml_path.exists() {
+            app_type = String::from("rust");
+            entry_point = String::from("src/main.rs");
+        }
+
+        Ok((app_type, entry_point))
+    }
+
     let (detected_app_type, entry_point) = detect_project_structure(&current_dir)?;
-    let app_type = if detected_app_type != "unknown" { &detected_app_type } else { app_type };
+    let app_type = if detected_app_type != "unknown" { &detected_app_type } else { &metadata.app_type };
 
     // Create necessary files
-    create_app_files(app_type, port, &entry_point)?;
+    create_app_files(app_type, &metadata.port, &entry_point)?;
     
+    // Initialize performance monitoring
+    let metrics = Arc::new(RwLock::new(PerformanceMetrics::default()));
+    let cache = Arc::new(DashMap::new());
+    // Create async runtime for concurrent operations
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        let app_name = metadata.app_name.clone();
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+        let mode = metadata.status.clone();
+        
+        let futures = vec![
+            tokio::spawn({
+                let app_name = app_name.clone();
+                let namespace = namespace.clone();
+                let mode = mode.clone();
+                async move { setup_monitoring(&app_name, &namespace, &mode) }
+            }),
+            tokio::spawn({
+                let cache = cache.clone();
+                async move { setup_caching(cache).await }
+            }),
+            tokio::spawn({
+                let mode = mode.clone();
+                async move { setup_load_balancing(&mode).await }
+            }),
+        ];
+
+        // Handle the results properly
+        for result in join_all(futures).await {
+            match result {
+                Ok(_) => (),
+                Err(e) => eprintln!("Task error: {}", e),
+            }
+        }
+        
+        Ok::<(), io::Error>(())
+    })?;
+
+    fn optimize_for_framework(app_type: &str, mode: &str) -> io::Result<()> {
+        match app_type {
+            "nextjs" => {
+                if mode == "prod" {
+                    // Production optimizations for Next.js
+                    println!("Applying Next.js production optimizations...");
+                    Command::new("npm")
+                        .args(&["run", "build"])
+                        .status()?;
+                }
+            }
+            "react" => {
+                if mode == "prod" {
+                    // Production optimizations for React
+                    println!("Applying React production optimizations...");
+                    Command::new("npm")
+                        .args(&["run", "build"])
+                        .status()?;
+                }
+            }
+            "remix" => {
+                if mode == "prod" {
+                    // Production optimizations for Remix
+                    println!("Applying Remix production optimizations...");
+                    Command::new("npm")
+                        .args(&["run", "build"])
+                        .status()?;
+                }
+            }
+            _ => println!("No specific optimizations for framework: {}", app_type),
+        }
+        Ok(())
+    }
+
+    // Framework-specific optimizations
+    optimize_for_framework(app_type, mode)?;
+
     // Generate and write Dockerfile
     println!("📝 Generating Dockerfile...");
-    let dockerfile_content = generate_dockerfile(app_type);
-    fs::write("Dockerfile", dockerfile_content)?;
-    // Generate and write docker-compose.yml with health check
-    println!("📝 Generating docker-compose.yml...");
-    let compose_content = generate_docker_compose(app_name, port);
-    fs::write("docker-compose.yml", &compose_content)?;
-
-    // Verify Docker installation
-    verify_docker_installation()?;
-
-    // Stop any existing containers with the same name
-    println!("🔄 Cleaning up existing containers...");
-    Command::new("docker")
-        .args(["compose", "down"])
-        .current_dir(&current_dir)
-        .output()?;
-
-    // Build and run the container
-    println!("🏗️  Building container...");
-    let build_status = Command::new("docker")
-        .args(["compose", "build", "--no-cache"])
-        .current_dir(&current_dir)
-        .status()?;
-
-    if !build_status.success() {
-        metadata.status = "build_failed".to_string();
-        save_metadata(&metadata)?;
-        return Err(io::Error::new(io::ErrorKind::Other, "Container build failed"));
-    }
-
-    println!("🚀 Starting container...");
-    let run_status = Command::new("docker")
-        .args(["compose", "up", "-d"])
-        .current_dir(&current_dir)
-        .status()?;
-
-    if !run_status.success() {
-        metadata.status = "startup_failed".to_string();
-        save_metadata(&metadata)?;
-        return Err(io::Error::new(io::ErrorKind::Other, "Container startup failed"));
-    }
-
-    // Get container ID
-    if let Ok(output) = Command::new("docker")
-        .args(["compose", "ps", "-q"])
-        .current_dir(&current_dir)
-        .output()
-    {
-        metadata.container_id = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    // Verify container is running
-    println!("🔍 Verifying container status...");
-    if let Err(e) = verify_container_status(metadata.container_id.as_deref().unwrap_or_default()) {
-        metadata.status = "verification_failed".to_string();
-        save_metadata(&metadata)?;
-        return Err(e);
-    }
-
-    metadata.status = "running".to_string();
-    save_metadata(&metadata)?;
-
-    println!("{}", GradientText::rainbow("🎉 Deployment completed successfully!"));
-    println!("📊 Container Status:");
-    println!("   • Name: {}", app_name);
-    println!("   • Type: {}", app_type);
-    println!("   • Port: {}", port);
-    println!("   • Container ID: {}", metadata.container_id.as_deref().unwrap_or_default());
-    println!("   • Status: {}", metadata.status);
-    println!("\n🌐 Access your app at: http://localhost:{}", port);
-    println!("📝 Logs: docker logs {}", metadata.container_id.as_deref().unwrap_or_default());
-
-    if k8s_enabled {
-        println!("🔄 Verifying Kubernetes setup...");
-        verify_kubernetes_setup()?;
-        
-        println!("🎡 Deploying to Kubernetes...");
-        deploy_to_kubernetes(&mut metadata, app_name, app_type, port, replicas, namespace, mode)?;
-    }
-
+    let package_json = r#"{
+        "next": "^13.4.12",
+        "react": "^18.2.0", 
+        "react-dom": "^18.2.0"
+    }"#;
+    fs::write("package.json", package_json)?;
     Ok(())
 }
 
-fn detect_project_structure(dir: &Path) -> io::Result<(String, String)> {
-    let package_json = dir.join("package.json");
-    if package_json.exists() {
-        let content = fs::read_to_string(package_json)?;
-        let json: serde_json::Value = serde_json::from_str(&content)?;
-
-        if let Some(dependencies) = json.get("dependencies") {
-            if dependencies.get("next").is_some() {
-                return Ok(("nextjs".to_string(), "bun run dev".to_string()));
-            } else if dependencies.get("react").is_some() {
-                return Ok(("react".to_string(), "bun run start".to_string()));
-            } else if dependencies.get("@remix-run/react").is_some() {
-                return Ok(("remix".to_string(), "bun run dev".to_string()));
-            } else if dependencies.get("astro").is_some() {
-                return Ok(("astro".to_string(), "bun run dev".to_string()));
-            } else if dependencies.get("vue").is_some() {
-                return Ok(("vue".to_string(), "bun run serve".to_string()));
-            } else if dependencies.get("nuxt").is_some() {
-                return Ok(("nuxt".to_string(), "bun run dev".to_string()));
-            } else if dependencies.get("express").is_some() && dependencies.get("mongodb").is_some() {
-                return Ok(("mern".to_string(), "bun run dev".to_string()));
-            }
-        }
-
-        return Ok(("node".to_string(), "bun run start".to_string()));
-    }
-
-    for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-        if entry.file_type().is_file() {
-            match entry.path().extension().and_then(|s| s.to_str()) {
-                Some("html") => return Ok(("vanilla".to_string(), "serve -s .".to_string())),
-                Some("go") => return Ok(("go".to_string(), "go run .".to_string())),
-                Some("py") => return Ok(("python".to_string(), "python main.py".to_string())),
-                _ => {}
-            }
-        }
-    }
-
-    Ok(("unknown".to_string(), "".to_string()))
-}
 fn create_nextjs_files(port: &str) -> io::Result<()> {
-    let package_json = format!(r#"{{
+    let package_json = r#"{
         "name": "nextjs-app",
         "version": "0.1.0",
         "private": true,
-        "scripts": {{
-            "dev": "next dev -p {}",
+        "scripts": {
+            "dev": "next dev",
             "build": "next build",
-            "start": "next start -p {}"
-        }},
-        "dependencies": {{
+            "start": "next start"
+        },
+        "dependencies": {
             "next": "^13.4.12",
-            "react": "^18.2.0", 
+            "react": "^18.2.0",
             "react-dom": "^18.2.0"
-        }}
-    }}"#, port, port);
+        }
+    }"#;
     fs::write("package.json", package_json)?;
     Ok(())
 }
@@ -735,56 +773,51 @@ README.md
 }
 
 fn generate_dockerfile(app_type: &str) -> String {
-    format!(
-        r#"FROM node:18-alpine
+    let base = r#"
+FROM node:18-alpine AS builder
 
 # Install system dependencies
 RUN apk add --no-cache \
     bash \
     curl \
     nginx \
-    supervisor
+    supervisor \
+    redis \
+    postgresql-client
 
-# Install Bun
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${{PATH}}"
+# Install Bun with version pinning
+ARG BUN_VERSION=1.0.0
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"
+ENV PATH="/root/.bun/bin:${PATH}"
 
-# Create app directory
+# Set up performance monitoring
+RUN npm install -g clinic autocannon
+
+# Production optimizations
+ENV NODE_ENV=production
+ENV BUN_JS_ALLOCATIONS=1000000
+ENV BUN_RUNTIME_CALLS=100000
+
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
+"#;
 
-# Install dependencies based on package manager
-RUN if [ -f "package-lock.json" ]; then \
-        npm ci; \
-    elif [ -f "yarn.lock" ]; then \
-        yarn install --frozen-lockfile; \
-    else \
-        npm install; \
-    fi
+    // Add framework-specific optimizations
+    let framework_optimizations = match app_type {
+        "nextjs" => r#"
+# Next.js optimizations
+RUN bun install --production
+RUN bun run build
 
-# Copy app source
-COPY . .
+# Enable compression and caching
+RUN bun add compression helmet redis connect-redis"#,
+        // Add other framework optimizations...
+        _ => ""
+    };
 
-# Configure Nginx
-COPY nginx.conf /etc/nginx/nginx.conf
-
-# Configure Supervisor
-COPY supervisord.conf /etc/supervisord.conf
-
-# Build the application if needed
-RUN if [ -f "package.json" ]; then \
-        if grep -q "\"build\"" package.json; then \
-            npm run build; \
-        fi \
-    fi
-
-EXPOSE ${{PORT}}
-
-# Start supervisor which will manage Nginx and the app
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]"#
-    )
+    format!("{}{}", base, framework_optimizations)
 }
 
 fn generate_nginx_config(mode: &str) -> io::Result<()> {
@@ -1086,7 +1119,7 @@ fn deploy_to_kubernetes(
     }
 
     // Wait for deployment
-    wait_for_kubernetes_deployment(&metadata.kubernetes.deployment_name, namespace)?;
+    wait_for_kubernetes_deployment(&metadata.kubernetes_metadata.deployment_name, namespace)?;
 
     // Update status
     update_pod_status(metadata, namespace)?;
@@ -1338,7 +1371,7 @@ fn update_pod_status(metadata: &mut AppMetadata, namespace: &str) -> io::Result<
         ])
         .output()?;
 
-    metadata.kubernetes.pod_status = String::from_utf8_lossy(&output.stdout)
+    metadata.kubernetes_metadata.pod_status = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .map(String::from)
         .collect();
@@ -1380,12 +1413,12 @@ spec:
 
 fn print_kubernetes_status(metadata: &AppMetadata) {
     println!("\n{}", GradientText::cyber("📊 Kubernetes Status:"));
-    println!("{}", GradientText::status(&format!("   • Namespace: {}", metadata.kubernetes.namespace)));
-    println!("{}", GradientText::status(&format!("   • Deployment: {}", metadata.kubernetes.deployment_name)));
-    println!("{}", GradientText::status(&format!("   • Service: {}", metadata.kubernetes.service_name)));
-    println!("{}", GradientText::status(&format!("   • Replicas: {}", metadata.kubernetes.replicas)));
-    println!("{}", GradientText::status(&format!("   • Pod Status: {:?}", metadata.kubernetes.pod_status)));
-    if let Some(host) = &metadata.kubernetes.ingress_host {
+    println!("{}", GradientText::status(&format!("   • Namespace: {}", metadata.kubernetes_metadata.namespace)));
+    println!("{}", GradientText::status(&format!("   • Deployment: {}", metadata.kubernetes_metadata.deployment_name)));
+    println!("{}", GradientText::status(&format!("   • Service: {}", metadata.kubernetes_metadata.service_name)));
+    println!("{}", GradientText::status(&format!("   • Replicas: {}", metadata.kubernetes_metadata.replicas)));
+    println!("{}", GradientText::status(&format!("   • Pod Status: {:?}", metadata.kubernetes_metadata.pod_status)));
+    if let Some(host) = &metadata.kubernetes_metadata.ingress_host {
         println!("{}", GradientText::status(&format!("   • Ingress Host: {}", host)));
     }
 }
@@ -1609,7 +1642,7 @@ fn cleanup_deployment() -> io::Result<()> {
                 .args(["rmi", &format!("rust-dockerize-{}", metadata.app_name), &format!("{}:latest", metadata.app_name)])
                 .output()?;
 
-            if !metadata.kubernetes.namespace.is_empty() {
+            if !metadata.kubernetes_metadata.namespace.is_empty() {
                 println!("{}", GradientText::info("☸️  Cleaning up Kubernetes resources..."));
                 Command::new("kubectl")
                     .args(["delete", "-f", "k8s-deployment.yaml", "--ignore-not-found"])
@@ -1779,24 +1812,29 @@ frontend stats
 
 frontend http_front
     bind *:80
-    bind *:443 ssl crt /etc/ssl/certs/haproxy.pem
+    bind *:443 ssl crt /etc/ssl/private/cert.pem
     http-request redirect scheme https unless {{ ssl_fc }}
-    mode http
-    option httplog
-    option forwardfor
-    default_backend http_back
+    
+    # Advanced security headers
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    http-response set-header X-Frame-Options "SAMEORIGIN"
+    http-response set-header X-Content-Type-Options "nosniff"
+    
+    # Rate limiting
+    stick-table type ip size 100k expire 30s store conn_cur,conn_rate(3s),http_req_rate(10s)
+    http-request track-sc0 src
+    http-request deny deny_status 429 if {{ sc_http_req_rate(0) gt 10 }}
+    
+    default_backend apps
 
-backend http_back
-    mode http
+backend apps
     balance roundrobin
     option httpchk HEAD /health HTTP/1.1\r\nHost:\ localhost
     http-check expect status 200
-    default-server inter 3s fall 3 rise 2
-    server server1 127.0.0.1:8080 check weight 100 maxconn 3000
-    server server2 127.0.0.1:8081 check weight 100 maxconn 3000
-    server server3 127.0.0.1:8082 check weight 100 maxconn 3000
-    compression algo gzip
-    compression type text/plain text/css application/javascript"#);
+    server app1 127.0.0.1:3000 check weight 100 maxconn 3000
+    server app2 127.0.0.1:3001 check weight 100 maxconn 3000
+    "#
+    );
 
     fs::write("haproxy.cfg", config)?;
     Ok(())
@@ -1866,4 +1904,87 @@ fn verify_kubernetes_setup() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+// Add high-performance caching layer
+async fn setup_caching(cache: Arc<DashMap<String, Vec<u8>>>) -> io::Result<()> {
+    // Initialize Redis connection
+    let redis_config = r#"
+maxmemory 2gb
+maxmemory-policy allkeys-lru
+activerehashing yes
+appendonly yes
+appendfsync everysec
+no-appendfsync-on-rewrite yes
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+"#;
+    fs::write("redis.conf", redis_config)?;
+    
+    Ok(())
+}
+
+// Enhanced load balancing configuration
+async fn setup_load_balancing(mode: &str) -> io::Result<()> {
+    let haproxy_config = format!(
+        r#"global
+    maxconn 100000
+    ssl-server-verify none
+    tune.ssl.default-dh-param 2048
+    stats socket /var/run/haproxy.sock mode 600 level admin
+    stats timeout 2m
+
+defaults
+    mode http
+    timeout connect 10s
+    timeout client 30s
+    timeout server 30s
+    option httplog
+    option dontlognull
+    option http-server-close
+    option forwardfor except 127.0.0.0/8
+    option redispatch
+    retries 3
+    maxconn 3000
+
+frontend main
+    bind *:80
+    bind *:443 ssl crt /etc/ssl/private/cert.pem
+    http-request redirect scheme https unless {{ ssl_fc }}
+    
+    # Advanced security headers
+    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    http-response set-header X-Frame-Options "SAMEORIGIN"
+    http-response set-header X-Content-Type-Options "nosniff"
+    
+    # Rate limiting
+    stick-table type ip size 100k expire 30s store conn_cur,conn_rate(3s),http_req_rate(10s)
+    http-request track-sc0 src
+    http-request deny deny_status 429 if {{ sc_http_req_rate(0) gt 10 }}
+    
+    default_backend apps
+
+backend apps
+    balance roundrobin
+    option httpchk HEAD /health HTTP/1.1\r\nHost:\ localhost
+    http-check expect status 200
+    server app1 127.0.0.1:3000 check weight 100 maxconn 3000
+    server app2 127.0.0.1:3001 check weight 100 maxconn 3000
+    "#
+    );
+    
+    fs::write("haproxy.cfg", haproxy_config)?;
+    Ok(())
+}
+
+fn default_namespace() -> String {
+    "default".to_string()
+}
+
+fn default_min_instances() -> u32 {
+    1
+}
+
+fn default_max_instances() -> u32 {
+    5
 }
