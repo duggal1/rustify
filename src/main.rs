@@ -2,6 +2,7 @@ use std::{env, fs, io::{self, Write}, path::Path, process::Command};
 use chrono::Local;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use walkdir::WalkDir;
 use std::thread;
 use std::time::Duration;
@@ -616,224 +617,31 @@ fn create_nextjs_files(port: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn create_app_files(app_type: &str, port: &str, entry_point: &str) -> io::Result<()> {
-    let _ = entry_point;
-    if !Path::new("package.json").exists() {
-        match app_type {
-            "nextjs" => create_nextjs_files(port)?,
-            "react" => {
-                let package_json = r#"{
-                    "name": "react-app",
-                    "version": "0.1.0",
-                    "private": true,
-                    "dependencies": {
-                        "react": "^18.2.0",
-                        "react-dom": "^18.2.0",
-                        "react-scripts": "5.0.1"
-                    },
-                    "scripts": {
-                        "start": "react-scripts start",
-                        "build": "react-scripts build",
-                        "test": "react-scripts test",
-                        "eject": "react-scripts eject"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-            },
-            "remix" => {
-                let package_json = r#"{
-                    "name": "remix-app",
-                    "private": true,
-                    "sideEffects": false,
-                    "scripts": {
-                        "build": "remix build",
-                        "dev": "remix dev",
-                        "start": "remix-serve build"
-                    },
-                    "dependencies": {
-                        "@remix-run/node": "^1.19.1",
-                        "@remix-run/react": "^1.19.1",
-                        "@remix-run/serve": "^1.19.1",
-                        "react": "^18.2.0",
-                        "react-dom": "^18.2.0"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-            },
-            "astro" => {
-                let package_json = r#"{
-                    "name": "astro-app",
-                    "type": "module",
-                    "version": "0.0.1",
-                    "scripts": {
-                        "dev": "astro dev",
-                        "start": "astro dev",
-                        "build": "astro build",
-                        "preview": "astro preview"
-                    },
-                    "dependencies": {
-                        "astro": "^2.10.1"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-            },
-            "vue" => {
-                let package_json = r#"{
-                    "name": "vue-app",
-                    "version": "0.1.0",
-                    "private": true,
-                    "scripts": {
-                        "serve": "vue-cli-service serve",
-                        "build": "vue-cli-service build"
-                    },
-                    "dependencies": {
-                        "core-js": "^3.8.3",
-                        "vue": "^3.2.13"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-            },
-            "nuxt" => {
-                let package_json = r#"{
-                    "name": "nuxt-app",
-                    "private": true,
-                    "scripts": {
-                        "build": "nuxt build",
-                        "dev": "nuxt dev",
-                        "start": "nuxt start"
-                    },
-                    "dependencies": {
-                        "nuxt": "^3.6.5"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-            },
-            "mern" => {
-                let package_json = r#"{
-                    "name": "mern-app",
-                    "version": "1.0.0",
-                    "scripts": {
-                        "start": "node index.js",
-                        "dev": "nodemon index.js"
-                    },
-                    "dependencies": {
-                        "express": "^4.18.2",
-                        "mongoose": "^7.4.1",
-                        "cors": "^2.8.5",
-                        "dotenv": "^16.3.1"
-                    },
-                    "devDependencies": {
-                        "nodemon": "^3.0.1"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-
-                let index_content = r#"const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-require('dotenv').config();
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost/mern-app');
-
-app.get('/api/test', (req, res) => {
-    res.json({ message: 'MERN API is working!' });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});"#;
-                fs::write("index.js", index_content)?;
-            },
-            "node" => {
-                let package_json = r#"{
-                    "name": "node-app",
-                    "version": "1.0.0",
-                    "scripts": {
-                        "start": "node index.js",
-                        "dev": "nodemon index.js"
-                    },
-                    "dependencies": {
-                        "express": "^4.18.2"
-                    },
-                    "devDependencies": {
-                        "nodemon": "^3.0.1"
-                    }
-                }"#;
-                fs::write("package.json", package_json)?;
-
-                let index_content = r#"const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-    res.send('Hello from Node.js!');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});"#;
-                fs::write("index.js", index_content)?;
-            },
-            "vanilla" => {
-                let index_html = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vanilla JS App</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-    <div id="app">
-        <h1>Welcome to Vanilla JS App</h1>
-    </div>
-    <script src="app.js"></script>
-</body>
-</html>"#;
-                fs::write("index.html", index_html)?;
-
-                let styles_css = r#"body {
-    font-family: Arial, sans-serif;
-    margin: 0;
-    padding: 20px;
-    background-color: #f0f0f0;
-}
-
-#app {
-    max-width: 800px;
-    margin: 0 auto;
-    background-color: white;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-}"#;
-                fs::write("styles.css", styles_css)?;
-
-                let app_js = r#"document.addEventListener('DOMContentLoaded', () => {
-    console.log('Vanilla JS App is running!');
-});"#;
-                fs::write("app.js", app_js)?;
-            },
-            _ => {}
-        }
+fn create_app_files(app_type: &str, port: &str) -> io::Result<()> {
+    // First check for existing package.json
+    if Path::new("package.json").exists() {
+        println!("📦 Found existing package.json, optimizing configuration...");
+        optimize_existing_project(app_type)?;
+        return Ok(());
     }
 
-    // Create or update .dockerignore
-    let dockerignore_content = r#"
-node_modules/
-npm-debug.log
-Dockerfile
-.dockerignore
-.git
-.gitignore
-README.md
-"#;
-    fs::write(".dockerignore", dockerignore_content.trim())?;
+    match app_type {
+        "nextjs" => create_nextjs_files(port)?,
+        "react" => create_react_files(port)?,
+        "nuxt" => create_nuxt_files(port)?,
+        "vue" => create_vue_files(port)?,
+        "svelte" => create_svelte_files(port)?,
+        "angular" => create_angular_files(port)?,
+        "astro" => create_astro_files(port)?,
+        "remix" => create_remix_files(port)?,
+        "mern" => create_mern_files(port)?,
+        _ => return Err(io::Error::new(io::ErrorKind::Other, "Unsupported project type")),
+    }
+
+    // Create common optimized configurations
+    create_enhanced_dockerignore()?;
+    create_github_workflows()?;
+    create_optimization_configs(app_type)?;
 
     Ok(())
 }
@@ -1654,7 +1462,7 @@ fn install_nginx_ingress() -> io::Result<()> {
     Ok(())
 }
 
-fn prepare_kubernetes_deployment(app_name: &str, mode: &str) -> io::Result<()> {
+fn prepare_kubernetes_deployment(app_name: &str, _mode: &str) -> io::Result<()> {
     // Tag the image for Kubernetes
     Command::new("docker")
         .args(["tag", &format!("rust-dockerize-{}", app_name), &format!("{}:latest", app_name)])
@@ -2145,7 +1953,7 @@ fn initialize_project(project_type: &str) -> io::Result<()> {
     fs::create_dir_all("src")?;
     
     // Create app files based on project type
-    create_app_files(project_type, "3000", "src/index.js")?;
+    create_app_files(project_type, "3000")?;
     
     // Initialize git if not already initialized
     if !Path::new(".git").exists() {
@@ -2858,5 +2666,1362 @@ docker-compose*.yml
 "#;
 
     fs::write(".dockerignore", dockerignore.trim())?;
+    Ok(())
+}
+
+fn optimize_existing_project(app_type: &str) -> io::Result<()> {
+    let package_json = fs::read_to_string("package.json")?;
+    let mut pkg: serde_json::Value = serde_json::from_str(&package_json)?;
+
+    match app_type {
+        "react" => optimize_react_config(&mut pkg)?,
+        "nuxt" => optimize_nuxt_config(&mut pkg)?,
+        "vue" => optimize_vue_config(&mut pkg)?,
+        "svelte" => optimize_svelte_config(&mut pkg)?,
+        "angular" => optimize_angular_config(&mut pkg)?,
+        "astro" => optimize_astro_config(&mut pkg)?,
+        "remix" => optimize_remix_config(&mut pkg)?,
+        "mern" => optimize_mern_config(&mut pkg)?,
+        _ => {}
+    }
+    // Save optimized package.json
+    fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
+
+    // Create framework-specific optimization files
+    create_framework_configs(app_type)?;
+
+    Ok(())
+}
+
+fn optimize_react_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("webpack-bundle-analyzer stats.json"));
+        scripts.insert("build:prod".to_string(), 
+            json!("GENERATE_SOURCEMAP=false react-scripts build"));
+    }
+
+    // Create optimized webpack config
+    let webpack_config = r#"
+    const path = require('path');
+    const CompressionPlugin = require('compression-webpack-plugin');
+    const TerserPlugin = require('terser-webpack-plugin');
+
+    module.exports = {
+        optimization: {
+            minimize: true,
+            minimizer: [new TerserPlugin({
+                terserOptions: {
+                    compress: {
+                        drop_console: true,
+                    },
+                },
+            })],
+            splitChunks: {
+                chunks: 'all',
+                minSize: 20000,
+                maxSize: 244000,
+                minChunks: 1,
+                maxAsyncRequests: 30,
+                maxInitialRequests: 30,
+                automaticNameDelimiter: '~',
+                enforceSizeThreshold: 50000,
+                cacheGroups: {
+                    defaultVendors: {
+                        test: /[\\/]node_modules[\\/]/,
+                        priority: -10
+                    },
+                    default: {
+                        minChunks: 2,
+                        priority: -20,
+                        reuseExistingChunk: true
+                    }
+                }
+            }
+        },
+        plugins: [
+            new CompressionPlugin({
+                algorithm: 'gzip',
+                test: /\.js$|\.css$|\.html$/,
+                threshold: 10240,
+                minRatio: 0.8,
+            }),
+        ],
+    };"#;
+
+    fs::write("webpack.config.js", webpack_config)?;
+    Ok(())
+}
+
+fn optimize_vue_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("vue-cli-service build --report"));
+        scripts.insert("build:prod".to_string(), 
+            json!("vue-cli-service build --modern"));
+    }
+
+    // Create vue.config.js with optimizations
+    let vue_config = r#"
+    const CompressionPlugin = require('compression-webpack-plugin');
+    
+    module.exports = {
+      productionSourceMap: false,
+      chainWebpack: config => {
+        config.optimization.splitChunks({
+          chunks: 'all',
+          maxInitialRequests: Infinity,
+          minSize: 20000,
+          cacheGroups: {
+            vendor: {
+              test: /[\\/]node_modules[\\/]/,
+              name(module) {
+                const packageName = module.context.match(
+                  /[\\/]node_modules[\\/](.*?)([\\/]|$)/
+                )[1];
+                return `vendor.${packageName.replace('@', '')}`;
+              },
+            },
+          },
+        });
+      },
+      configureWebpack: {
+        plugins: [
+          new CompressionPlugin({
+            algorithm: 'gzip',
+            test: /\.(js|css|html|svg)$/,
+            threshold: 10240,
+            minRatio: 0.8,
+          }),
+        ],
+        performance: {
+          hints: 'warning',
+          maxEntrypointSize: 512000,
+          maxAssetSize: 512000,
+        },
+      },
+    };"#;
+
+    fs::write("vue.config.js", vue_config)?;
+    Ok(())
+}
+
+fn create_vue_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "vue-app",
+        "version": "0.1.0",
+        "private": true,
+        "scripts": {
+            "serve": "vue-cli-service serve",
+            "build": "vue-cli-service build --modern",
+            "lint": "vue-cli-service lint",
+            "analyze": "vue-cli-service build --report"
+        },
+        "dependencies": {
+            "vue": "^3.3.0",
+            "vue-router": "^4.0.0",
+            "vuex": "^4.0.0"
+        },
+        "devDependencies": {
+            "@vue/cli-plugin-babel": "~5.0.0",
+            "@vue/cli-plugin-router": "~5.0.0",
+            "@vue/cli-plugin-vuex": "~5.0.0",
+            "@vue/cli-service": "~5.0.0"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    Ok(())
+}
+
+fn optimize_nuxt_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("nuxt build --analyze"));
+        scripts.insert("build:prod".to_string(), 
+            json!("nuxt build --modern=server"));
+    }
+
+    // Create nuxt.config.js with optimizations
+    let nuxt_config = r#"
+    export default {
+      // Server-side rendering mode
+      ssr: true,
+      
+      // Target static hosting
+      target: 'static',
+      
+      // Build optimizations
+      build: {
+        optimization: {
+          splitChunks: {
+            chunks: 'all',
+            automaticNameDelimiter: '.',
+            maxSize: 244000,
+          },
+          minimize: true,
+          minimizer: [
+            ['terser', {
+              terserOptions: {
+                compress: {
+                  drop_console: true,
+                },
+              },
+            }],
+          ],
+        },
+        extractCSS: true,
+        optimizeCSS: true,
+        html: {
+          minify: {
+            collapseBooleanAttributes: true,
+            decodeEntities: true,
+            minifyCSS: true,
+            minifyJS: true,
+            processConditionalComments: true,
+            removeEmptyAttributes: true,
+            removeRedundantAttributes: true,
+            trimCustomFragments: true,
+            useShortDoctype: true,
+          },
+        },
+      },
+      
+      // Performance optimizations
+      render: {
+        http2: {
+          push: true,
+        },
+        static: {
+          maxAge: 1000 * 60 * 60 * 24 * 7,
+        },
+        compressor: {
+          level: 9,
+        },
+      },
+    };"#;
+
+    fs::write("nuxt.config.js", nuxt_config)?;
+    Ok(())
+}
+
+fn create_nuxt_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "nuxt-app",
+        "version": "1.0.0",
+        "private": true,
+        "scripts": {
+            "dev": "nuxt",
+            "build": "nuxt build",
+            "start": "nuxt start",
+            "generate": "nuxt generate",
+            "analyze": "nuxt build --analyze"
+        },
+        "dependencies": {
+            "nuxt": "^3.0.0",
+            "@nuxtjs/composition-api": "^0.33.0"
+        },
+        "devDependencies": {
+            "@nuxt/types": "^2.15.8",
+            "@nuxt/typescript-build": "^2.1.0"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    Ok(())
+}
+
+
+
+fn optimize_svelte_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("vite build --mode analyze"));
+        scripts.insert("build:prod".to_string(), json!("vite build --mode production"));
+        scripts.insert("preview".to_string(), json!("vite preview"));
+    }
+
+    // Create vite.config.js with Svelte optimizations
+    let vite_config = r#"
+    import { defineConfig } from 'vite';
+    import { svelte } from '@sveltejs/vite-plugin-svelte';
+    import compress from 'vite-plugin-compress';
+    
+    export default defineConfig({
+      plugins: [
+        svelte({
+          compilerOptions: {
+            dev: false,
+            hydratable: true,
+          },
+          emitCss: true,
+        }),
+        compress({
+          verbose: false,
+          threshold: 10240,
+        }),
+      ],
+      build: {
+        target: 'esnext',
+        minify: 'terser',
+        terserOptions: {
+          compress: {
+            drop_console: true,
+            dead_code: true,
+          },
+        },
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              vendor: ['svelte'],
+              utils: ['./src/lib/**/*.js'],
+            },
+          },
+        },
+        cssCodeSplit: true,
+        sourcemap: false,
+        chunkSizeWarningLimit: 1000,
+      },
+      ssr: {
+        noExternal: ['svelte-routing'],
+      },
+    });"#;
+
+    fs::write("vite.config.js", vite_config)?;
+    Ok(())
+}
+
+fn optimize_angular_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("ng build --stats-json && webpack-bundle-analyzer dist/stats.json"));
+        scripts.insert("build:prod".to_string(), 
+            json!("ng build --configuration production --aot --build-optimizer --optimization"));
+    }
+
+    // Create custom-webpack.config.js
+    let webpack_config = r#"
+    const CompressionPlugin = require('compression-webpack-plugin');
+    const BrotliPlugin = require('brotli-webpack-plugin');
+    
+    module.exports = {
+      optimization: {
+        runtimeChunk: 'single',
+        splitChunks: {
+          cacheGroups: {
+            vendor: {
+              test: /[\\/]node_modules[\\/]/,
+              name: 'vendors',
+              chunks: 'all',
+            },
+          },
+        },
+      },
+      plugins: [
+        new CompressionPlugin({
+          algorithm: 'gzip',
+          test: /\.js$|\.css$|\.html$/,
+          threshold: 10240,
+          minRatio: 0.8,
+        }),
+        new BrotliPlugin({
+          asset: '[path].br[query]',
+          test: /\.(js|css|html|svg)$/,
+          threshold: 10240,
+          minRatio: 0.8,
+        }),
+      ],
+    };"#;
+
+    fs::write("custom-webpack.config.js", webpack_config)?;
+
+    // Update angular.json with optimizations
+    let angular_config = r#"{
+      "projects": {
+        "app": {
+          "architect": {
+            "build": {
+              "configurations": {
+                "production": {
+                  "optimization": true,
+                  "outputHashing": "all",
+                  "sourceMap": false,
+                  "namedChunks": false,
+                  "aot": true,
+                  "extractLicenses": true,
+                  "vendorChunk": true,
+                  "buildOptimizer": true,
+                  "budgets": [
+                    {
+                      "type": "initial",
+                      "maximumWarning": "2mb",
+                      "maximumError": "5mb"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }"#;
+
+    fs::write("angular.json", angular_config)?;
+    Ok(())
+}
+
+fn optimize_astro_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("analyze".to_string(), json!("astro build --analyze"));
+        scripts.insert("build:prod".to_string(), json!("astro build --mode production"));
+        scripts.insert("preview".to_string(), json!("astro preview"));
+    }
+
+    // Create astro.config.mjs with optimizations
+    let astro_config = r#"
+    import { defineConfig } from 'astro/config';
+    import compress from 'astro-compress';
+    import prefetch from '@astrojs/prefetch';
+    
+    export default defineConfig({
+      output: 'static',
+      build: {
+        inlineStylesheets: 'auto',
+        split: true,
+        sourcemap: false,
+        assets: 'assets',
+      },
+      vite: {
+        build: {
+          cssCodeSplit: true,
+          minify: 'terser',
+          terserOptions: {
+            compress: {
+              drop_console: true,
+              dead_code: true,
+            },
+          },
+          rollupOptions: {
+            output: {
+              manualChunks(id) {
+                if (id.includes('node_modules')) {
+                  return 'vendor';
+                }
+                if (id.includes('src/components')) {
+                  return 'components';
+                }
+              },
+            },
+          },
+        },
+        ssr: {
+          noExternal: ['@astrojs/*'],
+        },
+      },
+      integrations: [
+        compress({
+          CSS: true,
+          HTML: {
+            removeAttributeQuotes: true,
+            removeComments: true,
+            removeRedundantAttributes: true,
+            removeScriptTypeAttributes: true,
+            removeStyleLinkTypeAttributes: true,
+            useShortDoctype: true,
+            minifyCSS: true,
+            minifyJS: true,
+          },
+          Image: true,
+          JavaScript: true,
+        }),
+        prefetch(),
+      ],
+    });"#;
+
+    fs::write("astro.config.mjs", astro_config)?;
+
+    // Create tsconfig.json for TypeScript support
+    let tsconfig = r#"{
+      "extends": "astro/tsconfigs/strict",
+      "compilerOptions": {
+        "baseUrl": ".",
+        "paths": {
+          "@/*": ["src/*"]
+        },
+        "jsx": "preserve",
+        "jsxImportSource": "astro",
+        "verbatimModuleSyntax": true,
+        "moduleResolution": "node",
+        "module": "ESNext",
+        "target": "ESNext",
+        "strict": true,
+        "skipLibCheck": true
+      }
+    }"#;
+
+    fs::write("tsconfig.json", tsconfig)?;
+    Ok(())
+}
+
+
+
+fn optimize_remix_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("build:prod".to_string(), 
+            json!("remix build --sourcemap --minify"));
+        scripts.insert("analyze".to_string(), 
+            json!("REMIX_ANALYZE=1 remix build"));
+        scripts.insert("start:prod".to_string(), 
+            json!("remix-serve ./build/index.js"));
+    }
+
+    // Create remix.config.js with optimizations
+    let remix_config = r#"
+    /** @type {import('@remix-run/dev').AppConfig} */
+    module.exports = {
+      serverBuildTarget: "vercel",
+      server: process.env.NODE_ENV === "development" ? undefined : "./server.js",
+      ignoredRouteFiles: ["**/.*"],
+      serverDependenciesToBundle: [/^marked.*/],
+      future: {
+        v2_errorBoundary: true,
+        v2_meta: true,
+        v2_normalizeFormMethod: true,
+        v2_routeConvention: true,
+      },
+      tailwind: true,
+      postcss: true,
+      serverModuleFormat: "cjs",
+      serverMinify: true,
+      browserNodeBuiltinsPolyfill: {
+        modules: { crypto: true, path: true, fs: true, os: true }
+      },
+      watchPaths: ["./tailwind.config.js"],
+      
+      // Advanced optimizations
+      routes: async (defineRoutes) => {
+        return defineRoutes((route) => {
+          // Optimize routes with prefetch
+          route("*", "root.tsx", { prefetch: "intent" });
+        });
+      },
+    };"#;
+
+    fs::write("remix.config.js", remix_config)?;
+
+    // Create custom server.js for production
+    let server_js = r#"
+    const path = require("path");
+    const express = require("express");
+    const compression = require("compression");
+    const morgan = require("morgan");
+    const { createRequestHandler } = require("@remix-run/express");
+
+    const app = express();
+    app.use(compression());
+    app.use(morgan("tiny"));
+
+    // Static files with cache headers
+    app.use(
+      "/build",
+      express.static("public/build", {
+        immutable: true,
+        maxAge: "1y",
+      })
+    );
+    app.use(express.static("public", { maxAge: "1h" }));
+
+    // REMIX handler with optimizations
+    app.all(
+      "*",
+      createRequestHandler({
+        build: require("./build"),
+        mode: process.env.NODE_ENV,
+        getLoadContext(req, res) {
+          return { req, res };
+        },
+      })
+    );
+
+    const port = process.env.PORT || 3000;
+    app.listen(port, () => console.log(`Express server listening on port ${port}`));"#;
+
+    fs::write("server.js", server_js)?;
+    Ok(())
+}
+
+fn optimize_mern_config(pkg: &mut serde_json::Value) -> io::Result<()> {
+    // Add optimization scripts for both frontend and backend
+    if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        scripts.insert("build:prod".to_string(), 
+            json!("npm run build:server && npm run build:client"));
+        scripts.insert("start:prod".to_string(), 
+            json!("NODE_ENV=production node dist/server/index.js"));
+        scripts.insert("analyze".to_string(), 
+            json!("webpack-bundle-analyzer client/build/bundle-stats.json"));
+    }
+
+    // Create webpack.config.js for React frontend
+    let webpack_config = r#"
+    const path = require('path');
+    const CompressionPlugin = require('compression-webpack-plugin');
+    const TerserPlugin = require('terser-webpack-plugin');
+    const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
+
+    module.exports = {
+      mode: 'production',
+      entry: './client/src/index.js',
+      output: {
+        path: path.resolve(__dirname, 'client/build'),
+        filename: '[name].[contenthash].js',
+        chunkFilename: '[name].[contenthash].chunk.js',
+      },
+      optimization: {
+        minimizer: [
+          new TerserPlugin({
+            terserOptions: {
+              compress: {
+                drop_console: true,
+              },
+            },
+          }),
+        ],
+        splitChunks: {
+          chunks: 'all',
+          minSize: 20000,
+          maxSize: 244000,
+          cacheGroups: {
+            vendor: {
+              test: /[\\/]node_modules[\\/]/,
+              name(module) {
+                const packageName = module.context.match(
+                  /[\\/]node_modules[\\/](.*?)([\\/]|$)/
+                )[1];
+                return `vendor.${packageName.replace('@', '')}`;
+              },
+            },
+          },
+        },
+      },
+      plugins: [
+        new CompressionPlugin(),
+        process.env.ANALYZE && new BundleAnalyzerPlugin(),
+      ].filter(Boolean),
+    };"#;
+
+    fs::write("webpack.config.js", webpack_config)?;
+
+    // Create optimized Express server configuration
+    let server_config = r#"
+    const express = require('express');
+    const compression = require('compression');
+    const helmet = require('helmet');
+    const mongoose = require('mongoose');
+    const cors = require('cors');
+    const rateLimit = require('express-rate-limit');
+    const mongoSanitize = require('express-mongo-sanitize');
+    const xss = require('xss-clean');
+    const hpp = require('hpp');
+    const path = require('path');
+
+    require('dotenv').config();
+
+    const app = express();
+
+    // Security Middleware
+    app.use(helmet());
+    app.use(mongoSanitize());
+    app.use(xss());
+    app.use(hpp());
+    app.use(compression());
+
+    // Rate limiting
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000,
+      max: 100
+    });
+    app.use('/api', limiter);
+
+    // MongoDB optimization
+    mongoose.connect(process.env.MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
+
+    // Cache optimization
+    const cacheMiddleware = (duration) => (req, res, next) => {
+      res.set('Cache-Control', `public, max-age=${duration}`);
+      next();
+    };
+
+    // Static file serving with cache
+    app.use('/static', cacheMiddleware(86400), 
+      express.static(path.join(__dirname, '../client/build')));
+
+    // Error handling middleware
+    app.use((err, req, res, next) => {
+      console.error(err.stack);
+      res.status(500).send('Something broke!');
+    });
+
+    module.exports = app;"#;
+
+    fs::write("server/config.js", server_config)?;
+
+    // Create PM2 ecosystem config for production
+    let pm2_config = r#"{
+      "apps": [{
+        "name": "mern-app",
+        "script": "./dist/server/index.js",
+        "instances": "max",
+        "exec_mode": "cluster",
+        "watch": false,
+        "env_production": {
+          "NODE_ENV": "production"
+        },
+        "node_args": "--max_old_space_size=4096"
+      }]
+    }"#;
+
+    fs::write("ecosystem.config.json", pm2_config)?;
+    Ok(())
+}
+
+fn create_framework_configs(app_type: &str) -> io::Result<()> {
+    match app_type {
+        "nextjs" => {
+            // Create Next.js specific files
+            create_next_config()?;
+            create_next_typescript_config()?;
+        },
+        "react" => {
+            // Create React specific files
+            create_react_config()?;
+            create_babel_config()?;
+            create_react_typescript_config()?;
+        },
+        "vue" => {
+            // Create Vue specific files
+            create_vue_config()?;
+            create_vue_typescript_config()?;
+        },
+        "svelte" => {
+            // Create Svelte specific files
+            create_svelte_config()?;
+            create_vite_config("svelte")?;
+        },
+        "angular" => {
+            // Create Angular specific files
+            create_editor_config()?;
+            create_angular_typescript_config()?;
+            create_angular_webpack_config()?;
+        },
+        "astro" => {
+            // Create Astro specific files
+            create_astro_config()?;
+            create_astro_typescript_config()?;
+        },
+        "remix" => {
+            // Create Remix specific files
+            create_remix_config()?;
+            create_remix_server_config()?;
+        },
+        "mern" => {
+            // Create MERN specific files
+            create_mern_client_config()?;
+            create_mern_server_config()?;
+            create_mern_db_config()?;
+            create_mern_deployment_config()?;
+        },
+        _ => return Ok(()),
+    }
+
+    // Common configurations for all frameworks
+    create_eslint_config(app_type)?;
+    create_prettier_config()?;
+    create_editor_config()?;
+
+    create_docker_compose(app_type)?;
+   
+
+    Ok(())
+}
+
+// Helper functions for creating specific configurations
+fn create_eslint_config(app_type: &str) -> io::Result<()> {
+    let eslint_config = match app_type {
+        "nextjs" | "react" => r#"{
+            "extends": [
+                "next/core-web-vitals",
+                "prettier"
+            ],
+            "rules": {
+                "react/no-unused-vars": "error",
+                "react-hooks/rules-of-hooks": "error",
+                "react-hooks/exhaustive-deps": "warn"
+            }
+        }"#,
+        "vue" => r#"{
+            "extends": [
+                "plugin:vue/vue3-recommended",
+                "prettier"
+            ],
+            "rules": {
+                "vue/multi-word-component-names": "error",
+                "vue/no-unused-vars": "error"
+            }
+        }"#,
+        // Add more framework-specific ESLint configs...
+        _ => r#"{
+            "extends": ["prettier"],
+            "rules": {
+                "no-unused-vars": "error",
+                "no-console": "warn"
+            }
+        }"#,
+    };
+
+    fs::write(".eslintrc.json", eslint_config)?;
+    Ok(())
+}
+
+fn create_prettier_config() -> io::Result<()> {
+    let prettier_config = r#"{
+        "semi": true,
+        "trailingComma": "es5",
+        "singleQuote": true,
+        "printWidth": 100,
+        "tabWidth": 2,
+        "useTabs": false
+    }"#;
+
+    fs::write(".prettierrc", prettier_config)?;
+    Ok(())
+}
+
+fn create_editor_config() -> io::Result<()> {
+    let editor_config = r#"
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+[*.{js,jsx,ts,tsx,vue,svelte,astro}]
+indent_style = space
+indent_size = 2
+
+[*.{css,scss,less,styl}]
+indent_style = space
+indent_size = 2
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2
+"#;
+
+    fs::write(".editorconfig", editor_config)?;
+    Ok(())
+}
+
+fn create_docker_compose(app_type: &str) -> io::Result<()> {
+    let docker_compose = match app_type {
+        "mern" => r#"
+version: '3.8'
+services:
+  client:
+    build: ./client
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - server
+  server:
+    build: ./server
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - MONGODB_URI=mongodb://mongo:27017/app
+    depends_on:
+      - mongo
+  mongo:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  mongodb_data:
+"#,
+        _ => r#"
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+"#,
+    };
+
+    fs::write("docker-compose.yml", docker_compose)?;
+    Ok(())
+}
+
+
+
+fn create_react_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "react-app",
+        "version": "0.1.0",
+        "private": true,
+        "scripts": {
+            "dev": "vite",
+            "build": "vite build",
+            "build:prod": "GENERATE_SOURCEMAP=false vite build",
+            "analyze": "vite build --mode analyze",
+            "preview": "vite preview",
+            "lint": "eslint src --ext .ts,.tsx"
+        },
+        "dependencies": {
+            "react": "^18.2.0",
+            "react-dom": "^18.2.0",
+            "react-router-dom": "^6.8.0"
+        },
+        "devDependencies": {
+            "@types/react": "^18.0.27",
+            "@types/react-dom": "^18.0.10",
+            "@vitejs/plugin-react": "^3.1.0",
+            "typescript": "^4.9.3",
+            "vite": "^4.1.0",
+            "compression-webpack-plugin": "^10.0.0",
+            "terser-webpack-plugin": "^5.3.7"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_react_config(&mut serde_json::from_str(&package_json)?)?;
+    Ok(())
+}
+
+fn create_svelte_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "svelte-app",
+        "version": "0.1.0",
+        "private": true,
+        "scripts": {
+            "dev": "vite dev",
+            "build": "vite build",
+            "build:prod": "vite build --mode production",
+            "analyze": "vite build --mode analyze",
+            "preview": "vite preview"
+        },
+        "dependencies": {
+            "svelte": "^4.0.0",
+            "svelte-routing": "^2.0.0"
+        },
+        "devDependencies": {
+            "@sveltejs/vite-plugin-svelte": "^2.4.0",
+            "typescript": "^5.0.0",
+            "vite": "^4.3.9",
+            "vite-plugin-compress": "^2.1.1"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_svelte_config(&mut serde_json::from_str(&package_json)?)?;
+    Ok(())
+}
+
+fn create_angular_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "angular-app",
+        "version": "0.0.0",
+        "scripts": {
+            "ng": "ng",
+            "start": "ng serve",
+            "build": "ng build",
+            "build:prod": "ng build --configuration production --aot",
+            "analyze": "ng build --stats-json && webpack-bundle-analyzer dist/stats.json",
+            "watch": "ng build --watch --configuration development",
+            "test": "ng test"
+        },
+        "dependencies": {
+            "@angular/animations": "^16.0.0",
+            "@angular/common": "^16.0.0",
+            "@angular/compiler": "^16.0.0",
+            "@angular/core": "^16.0.0",
+            "@angular/forms": "^16.0.0",
+            "@angular/platform-browser": "^16.0.0",
+            "@angular/platform-browser-dynamic": "^16.0.0",
+            "@angular/router": "^16.0.0",
+            "rxjs": "~7.8.0",
+            "zone.js": "~0.13.0"
+        },
+        "devDependencies": {
+            "@angular-devkit/build-angular": "^16.0.0",
+            "@angular/cli": "^16.0.0",
+            "@angular/compiler-cli": "^16.0.0",
+            "typescript": "~5.0.0",
+            "compression-webpack-plugin": "^10.0.0",
+            "brotli-webpack-plugin": "^1.1.0"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_angular_config(&mut serde_json::from_str(&package_json)?)?;
+    Ok(())
+}
+
+fn create_astro_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "astro-app",
+        "version": "0.0.1",
+        "scripts": {
+            "dev": "astro dev",
+            "start": "astro dev",
+            "build": "astro build",
+            "build:prod": "astro build --mode production",
+            "preview": "astro preview",
+            "analyze": "astro build --analyze"
+        },
+        "dependencies": {
+            "astro": "^2.5.0",
+            "@astrojs/prefetch": "^0.2.0"
+        },
+        "devDependencies": {
+            "@astrojs/ts-plugin": "^1.0.0",
+            "astro-compress": "^1.1.0",
+            "typescript": "^5.0.0"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_astro_config(&mut serde_json::from_str(&package_json)?)?;
+    Ok(())
+}
+
+fn create_remix_files(port: &str) -> io::Result<()> {
+    let package_json = r#"{
+        "name": "remix-app",
+        "private": true,
+        "sideEffects": false,
+        "scripts": {
+            "build": "remix build",
+            "build:prod": "remix build --sourcemap --minify",
+            "dev": "remix dev",
+            "analyze": "REMIX_ANALYZE=1 remix build",
+            "start": "remix-serve build/index.js",
+            "typecheck": "tsc"
+        },
+        "dependencies": {
+            "@remix-run/node": "^1.19.1",
+            "@remix-run/react": "^1.19.1",
+            "@remix-run/serve": "^1.19.1",
+            "compression": "^1.7.4",
+            "express": "^4.18.2",
+            "morgan": "^1.10.0"
+        },
+        "devDependencies": {
+            "@remix-run/dev": "^1.19.1",
+            "@types/react": "^18.0.35",
+            "@types/react-dom": "^18.0.11",
+            "typescript": "^5.0.4"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_remix_config(&mut serde_json::from_str(&package_json)?)?;
+    Ok(())
+}
+
+fn create_mern_files(port: &str) -> io::Result<()> {
+    // Create root package.json
+    let package_json = r#"{
+        "name": "mern-app",
+        "version": "1.0.0",
+        "scripts": {
+            "build": "npm run build:client && npm run build:server",
+            "build:client": "cd client && npm run build",
+            "build:server": "cd server && npm run build",
+            "build:prod": "npm run build:client:prod && npm run build:server:prod",
+            "start:prod": "NODE_ENV=production node dist/server/index.js",
+            "analyze": "cd client && npm run analyze"
+        },
+        "devDependencies": {
+            "concurrently": "^8.0.1"
+        }
+    }"#;
+
+    fs::write("package.json", package_json)?;
+    optimize_mern_config(&mut serde_json::from_str(&package_json)?)?;
+
+    // Create client and server directories
+    fs::create_dir_all("client")?;
+    fs::create_dir_all("server")?;
+
+    Ok(())
+}
+
+
+
+fn create_github_workflows() -> io::Result<()> {
+    fs::create_dir_all(".github/workflows")?;
+
+    // CI/CD Workflow
+    let ci_workflow = r#"name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Run linting
+      run: npm run lint
+    
+    - name: Run tests
+      run: npm run test
+    
+    - name: Build application
+      run: npm run build:prod
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-files
+        path: dist/
+
+  docker:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: build-files
+        path: dist/
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKER_HUB_USERNAME }}/app:latest
+        cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/app:buildcache
+        cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/app:buildcache,mode=max"#;
+
+    // Security scanning workflow
+    let security_workflow = r#"name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Run Snyk to check for vulnerabilities
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+    
+    - name: Run OWASP Dependency-Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'app'
+        path: '.'
+        format: 'HTML'
+    
+    - name: Upload security report
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-report
+        path: reports/"#;
+
+    fs::write(".github/workflows/ci.yml", ci_workflow)?;
+    fs::write(".github/workflows/security.yml", security_workflow)?;
+    Ok(())
+}
+
+fn create_optimization_configs(app_type: &str) -> io::Result<()> {
+    // Create Browserslist config for better browser targeting
+    let browserslist = r#">0.2%
+not dead
+not op_mini all
+not ie <= 11
+maintained node versions"#;
+    fs::write(".browserslistrc", browserslist)?;
+
+    // Create bundle analyzer config
+    let bundle_analyzer = r#"{
+  "analyzerMode": "static",
+  "reportFilename": "bundle-report.html",
+  "openAnalyzer": false,
+  "generateStatsFile": true,
+  "statsFilename": "bundle-stats.json"
+}"#;
+    fs::write(".analyzerrc", bundle_analyzer)?;
+
+    // Create performance budget config
+    let performance_budget = r#"{
+  "resourceSizes": [
+    {
+      "resourceType": "document",
+      "budget": 18
+    },
+    {
+      "resourceType": "stylesheet",
+      "budget": 50
+    },
+    {
+      "resourceType": "font",
+      "budget": 50
+    },
+    {
+      "resourceType": "image",
+      "budget": 300
+    },
+    {
+      "resourceType": "script",
+      "budget": 300
+    }
+  ],
+  "timings": [
+    {
+      "metric": "interactive",
+      "budget": 3000
+    },
+    {
+      "metric": "first-contentful-paint",
+      "budget": 1500
+    }
+  ]
+}"#;
+    fs::write("performance-budget.json", performance_budget)?;
+
+    // Framework-specific optimizations
+    match app_type {
+        "nextjs" => {
+            let next_config = r#"
+const withBundleAnalyzer = require('@next/bundle-analyzer')({
+  enabled: process.env.ANALYZE === 'true',
+})
+
+module.exports = withBundleAnalyzer({
+  swcMinify: true,
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production',
+  },
+  experimental: {
+    optimizeCss: true,
+    optimizeImages: true,
+    scrollRestoration: true,
+  },
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 60,
+  },
+  headers: async () => [
+    {
+      source: '/:all*(svg|jpg|png)',
+      locale: false,
+      headers: [
+        {
+          key: 'Cache-Control',
+          value: 'public, max-age=31536000, must-revalidate',
+        },
+      ],
+    },
+  ],
+})"#;
+            fs::write("next.config.js", next_config)?;
+        },
+        "react" => {
+            let craco_config = r#"
+const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
+const CompressionPlugin = require('compression-webpack-plugin');
+
+module.exports = {
+  webpack: {
+    configure: (webpackConfig) => {
+      webpackConfig.optimization = {
+        ...webpackConfig.optimization,
+        splitChunks: {
+          chunks: 'all',
+          minSize: 20000,
+          maxSize: 244000,
+        },
+      };
+      return webpackConfig;
+    },
+    plugins: [
+      new CompressionPlugin(),
+      process.env.ANALYZE && new BundleAnalyzerPlugin(),
+    ].filter(Boolean),
+  },
+}"#;
+            fs::write("craco.config.js", craco_config)?;
+        },
+        _ => {}
+    }
+
+    // Create cache config
+    let cache_config = r#"{
+  "cacheDirectory": ".cache",
+  "compression": true,
+  "compressionLevel": 6,
+  "maxAge": 86400000
+}"#;
+    fs::write("cache.config.json", cache_config)?;
+
     Ok(())
 }
