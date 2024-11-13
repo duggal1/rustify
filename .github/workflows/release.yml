@@ -10,14 +10,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            binary_name: rustify
           - os: macos-latest
             target: x86_64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            binary_name: rustify
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: rustify
 
     steps:
     - uses: actions/checkout@v2
@@ -35,17 +37,11 @@ jobs:
     - name: Package Binary
       run: |
         cd target/${{ matrix.target }}/release
-        if [ "${{ matrix.os }}" = "windows-latest" ]; then
-          7z a ../../../rust-dockerize-${{ matrix.target }}.zip rust-dockerize.exe
-        else
-          tar czf ../../../rust-dockerize-${{ matrix.target }}.tar.gz rust-dockerize
-        fi
-      shell: bash
-
+        tar czf ../../../rustify-${{ matrix.target }}.tar.gz ${{ matrix.binary_name }}
+        
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
       with:
-        files: |
-          rust-dockerize-${{ matrix.target }}.*
+        files: rustify-${{ matrix.target }}.tar.gz
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
