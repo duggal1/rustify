@@ -1,7 +1,18 @@
 [package]
-name = "rust-dockerize"
+name = "rustify"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "rustify"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true
 
 [dependencies]
 chrono = "0.4"
