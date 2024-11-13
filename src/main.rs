@@ -350,6 +350,11 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting enterprise-grade deployment...");
 
+    // First verify all infrastructure
+    verify_docker_installation()?;
+    verify_kubernetes_setup()?;
+    check_kubernetes_status()?;
+
     // Initialize async runtime
     let rt = Runtime::new()?;
     
@@ -358,21 +363,33 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         let app_name = metadata.app_name.clone();
         let namespace = metadata.kubernetes_metadata.namespace.clone();
 
-        // Setup security and infrastructure
+        // Setup security and caching layers
         setup_security_layer(&app_name, &namespace).await?;
-        setup_redis_cluster().await?;
-        setup_varnish_cache().await?;
+        setup_caching_layer().await?;
+        
+        // Setup load balancing based on environment
+        setup_load_balancing(if is_prod { "prod" } else { "dev" }).await?;
         
         Ok::<(), io::Error>(())
     })?;
 
     if is_prod {
-        // Production mode with both Nginx and HAProxy
         println!("🏭 Deploying production environment...");
         
-        // Generate optimized configs
-        generate_nginx_config("prod")?;
-        generate_haproxy_config("prod")?;
+        // Optimize system for production
+        optimize_kernel_parameters()?;
+        optimize_bun_runtime()?;
+        enhance_load_balancer_config()?;
+        
+        // Install and configure Nginx ingress
+        install_nginx_ingress()?;
+        let ingress_host = create_kubernetes_ingress(
+            &metadata.app_name,
+            &metadata.port,
+            &metadata.kubernetes_metadata.namespace,
+            "prod"
+        )?;
+        metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
         
         // Deploy load balancers
         deploy_haproxy(&metadata.kubernetes_metadata.namespace)?;
@@ -398,8 +415,20 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
             .status()?;
     }
 
+    // Save final metadata
+    save_metadata(metadata)?;
+
     println!("✅ Enterprise deployment complete!");
     Ok(())
+}
+
+// Add cleanup on program exit
+impl Drop for AppMetadata {
+    fn drop(&mut self) {
+        if let Err(e) = cleanup_deployment() {
+            eprintln!("Error during cleanup: {}", e);
+        }
+    }
 }
 
 // Helper function for enterprise docker-compose
@@ -1726,7 +1755,7 @@ fn check_kubernetes_status() -> io::Result<()> {
     Ok(())
 }
 
-fn generate_haproxy_config(mode: &str) -> io::Result<()> {
+fn generate_haproxy_config(_mode: &str) -> io::Result<()> {
     let config = format!(r#"
     backend apps
         balance first
