@@ -290,6 +290,12 @@ impl DockerManager {
     }
 }
 fn main() {
+    // First check Kubernetes connection
+    if let Err(e) = check_kubernetes_connection() {
+        eprintln!("Error connecting to Kubernetes: {}", e);
+        std::process::exit(1);
+    }
+
     let app = App::new("rustify")
         .version("0.1.0")
         .author("Harshit Duggal")
@@ -366,134 +372,126 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting enterprise-grade deployment...");
 
-    // Initialize Docker manager and verify setup
-    let docker_manager = DockerManager::new();
-    docker_manager.handle_docker_setup()?;
-
-    // First verify all infrastructure
+    // Step 1: Verify Docker and Kubernetes setup
     verify_docker_installation()?;
-    verify_kubernetes_setup()?;
-    verify_infrastructure()?;
     verify_kubernetes_connection()?;
-    check_kubernetes_status()?;
-    // Generate necessary configuration files
-    let dockerfile = generate_dockerfile(&metadata.app_type);
-    fs::write("Dockerfile", dockerfile)?;
-    let config = generate_supervisor_config();
-    fs::write("supervisord.conf", config)?;
-    let docker_compose = generate_docker_compose(&metadata.app_name, &metadata.port);
-    fs::write("docker-compose.yml", docker_compose)?;
 
-    // Build and verify container
+    // Step 2: Create namespace and prepare environment
+    let namespace = if is_prod { "production" } else { "development" };
+    create_namespace_with_quotas(namespace, if is_prod { "prod" } else { "dev" })?;
+
+    // Step 3: Build and tag Docker image
     println!("🏗️ Building container...");
     Command::new("docker")
-        .args(["build", "-t", &format!("rust-dockerize-{}", metadata.app_name), "."])
+        .args(["build", "-t", &format!("{}-app", metadata.app_name), "."])
         .status()?;
 
-    // Start container and verify status
-    let container_id = Command::new("docker")
-        .args(["run", "-d", &format!("rust-dockerize-{}", metadata.app_name)])
-        .output()?;
-    let container_id = String::from_utf8_lossy(&container_id.stdout).trim().to_string();
-    metadata.container_id = Some(container_id.clone());
-    
-    verify_container_status(&container_id)?;
-
-    // Initialize async runtime
-    let rt = Runtime::new()?;
-    
-    // Prepare Kubernetes environment
+    // Step 4: Tag for Kubernetes
     prepare_kubernetes_deployment(&metadata.app_name, if is_prod { "prod" } else { "dev" })?;
-    create_namespace_with_quotas(
-        &metadata.kubernetes_metadata.namespace, 
-        if is_prod { "prod" } else { "dev" }
-    )?;
 
-    // Generate and apply Kubernetes manifests
+    // Step 5: Generate Kubernetes manifests
     generate_kubernetes_manifests(
         &metadata.app_name,
         &metadata.app_type,
         &metadata.port,
-        metadata.kubernetes_metadata.replicas,
-        &metadata.kubernetes_metadata.namespace,
+        if auto_scale { 3 } else { 1 },
+        namespace,
         if is_prod { "prod" } else { "dev" }
     )?;
-    
-    apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
 
-    // Deploy to Kubernetes if in production
-    if is_prod {
-        let app_name = metadata.app_name.clone();
-        let app_type = metadata.app_type.clone();
-        let port = metadata.port.clone();
-        let replicas = metadata.kubernetes_metadata.replicas;
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
-        deploy_to_kubernetes(
-            metadata, // Changed from &metadata to metadata since function expects &mut AppMetadata
-            &app_name,
-            &app_type,
-            &port,
-            replicas,
-            &namespace,
-            "prod"
-        )?;
+    // Step 6: Apply manifests
+    apply_kubernetes_manifests(namespace)?;
 
-        // Setup enterprise infrastructure
-        rt.block_on(async {
-            setup_security_layer(&app_name, &namespace).await?;
-            setup_monitoring(&app_name, &namespace, "prod").await?;
-            setup_caching_layer().await?;
-            setup_load_balancing("prod").await?;
-            
-            Ok::<(), io::Error>(())
-        })?;
+    // Step 7: Setup monitoring and networking
+    let rt = Runtime::new()?;
+    rt.block_on(async {
+        setup_monitoring(&metadata.app_name, namespace, if is_prod { "prod" } else { "dev" }).await?;
+        Ok::<(), io::Error>(())
+    })?;
 
-        // Production optimizations
-        optimize_kernel_parameters()?;
-        optimize_bun_runtime()?;
-        enhance_load_balancer_config()?;
-        
-        if auto_scale {
-            setup_autoscaling(
-                &app_name,
-                &namespace,
-                replicas
-            )?;
-        }
-        
-        install_nginx_ingress()?;
-        let ingress_host = create_kubernetes_ingress(
-            &app_name,
-            &port,
-            &namespace,
-            "prod"
-        )?;
-        metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
-        
-        deploy_haproxy(&namespace)?;
-        deploy_nginx(&namespace)?;
-        setup_network_policies(&app_name, &namespace)?;
-    } else {
-        // Development setup
-        println!("🛠️ Deploying development environment...");
-        generate_nginx_config("dev")?;
-        generate_haproxy_config("dev")?;
-        
-        Command::new("docker-compose")
-            .args(["up", "-d"])
-            .status()?;
+    // Step 8: Configure auto-scaling if needed
+    if auto_scale {
+        setup_autoscaling(&metadata.app_name, namespace, 3)?;
     }
 
-    // Wait for deployment and update status
-    let deployment_name = metadata.kubernetes_metadata.deployment_name.clone();
-    let namespace = metadata.kubernetes_metadata.namespace.clone();
-    
-    wait_for_kubernetes_deployment(&deployment_name, &namespace)?;
-    update_pod_status(metadata, &namespace)?;
-    print_kubernetes_status(&metadata);
+    // Step 9: Wait for deployment
+    wait_for_kubernetes_deployment(&format!("{}-deployment", metadata.app_name), namespace)?;
+
+    // Step 10: Update metadata with deployment info
+    metadata.kubernetes_metadata.namespace = namespace.to_string();
+    metadata.kubernetes_metadata.deployment_name = format!("{}-deployment", metadata.app_name);
+    metadata.kubernetes_metadata.service_name = format!("{}-service", metadata.app_name);
+    metadata.kubernetes_metadata.replicas = if auto_scale { 3 } else { 1 };
+
+    // Step 11: Create ingress if in production
+    if is_prod {
+        if let Ok(host) = create_kubernetes_ingress(&metadata.app_name, &metadata.port, namespace, "prod") {
+            metadata.kubernetes_metadata.ingress_host = Some(host);
+        }
+    }
+
+    // Step 12: Update pod status
+    update_pod_status(metadata, namespace)?;
+
+    // Step 13: Save metadata
     save_metadata(metadata)?;
 
-    println!("✅ Enterprise deployment complete!");
+    println!("✅ Deployment completed successfully!");
+    print_kubernetes_status(metadata);
+
+    Ok(())
+}
+
+// Improved Kubernetes verification
+fn verify_kubernetes_connection() -> io::Result<()> {
+    println!("🔍 Verifying Kubernetes setup...");
+
+    // Check if Docker Desktop is running with Kubernetes
+    let docker_info = Command::new("docker")
+        .args(["info"])
+        .output()?;
+
+    if !String::from_utf8_lossy(&docker_info.stdout).contains("Kubernetes: enabled") {
+        println!("⚠️ Kubernetes is not enabled in Docker Desktop");
+        println!("Please enable Kubernetes:");
+        println!("1. Open Docker Desktop");
+        println!("2. Go to Settings/Preferences");
+        println!("3. Select Kubernetes");
+        println!("4. Check 'Enable Kubernetes'");
+        println!("5. Click Apply & Restart");
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Kubernetes is not enabled in Docker Desktop"
+        ));
+    }
+
+    // Verify kubectl connection
+    match Command::new("kubectl").args(["cluster-info"]).output() {
+        Ok(output) if output.status.success() => {
+            println!("✅ Connected to Kubernetes cluster");
+            
+            // Verify core components
+            let core_check = Command::new("kubectl")
+                .args(["get", "componentstatuses"])
+                .output()?;
+            
+            if core_check.status.success() {
+                println!("✅ Kubernetes core components are healthy");
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Kubernetes components are not healthy"
+                ));
+            }
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Cannot connect to Kubernetes cluster"
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -1408,7 +1406,7 @@ fn verify_infrastructure() -> io::Result<()> {
             
             // Check if Docker daemon is running
             match Command::new("docker").args(["ps"]).output() {
-                Ok(_) => println!("✅ Docker daemon is running"),
+                Ok(_) => println!(" Docker daemon is running"),
                 Err(_) => return Err(io::Error::new(
                     io::ErrorKind::Other,
                     "Docker daemon is not running. Please start Docker Desktop or docker service"
@@ -1655,7 +1653,7 @@ fn cleanup_deployment() -> io::Result<()> {
     Ok(())
 }
 
-fn verify_kubernetes_connection() -> io::Result<()> {
+fn check_kubernetes_connection() -> io::Result<()> {
     println!("🔍 Verifying Kubernetes connection...");
 
     // First, check if Docker Desktop is running
@@ -1827,26 +1825,74 @@ spec:
 }
 
 fn verify_kubernetes_setup() -> io::Result<()> {
-    println!("{}", GradientText::cyber("🔍 Verifying Kubernetes setup..."));
+    println!("🔍 Verifying Kubernetes setup...");
 
-    // Check if kubectl is installed
+    // Step 1: Check if kubectl is installed
     match Command::new("kubectl").arg("version").output() {
-        Ok(_) => println!("{}", GradientText::success("✅ kubectl is installed")),
+        Ok(_) => println!("✅ kubectl is installed"),
         Err(_) => return Err(io::Error::new(
             io::ErrorKind::NotFound,
             "kubectl is not installed. Please install kubectl first."
         )),
     }
 
-    // Check if Kubernetes is running
-    match Command::new("kubectl").args(["cluster-info"]).output() {
-        Ok(output) if output.status.success() => {
-            println!("{}", GradientText::success("✅ Kubernetes cluster is running"));
-        },
-        _ => return Err(io::Error::new(
+    // Step 2: Ensure Docker Desktop is running with Kubernetes
+    let docker_status = Command::new("docker").arg("info").output()?;
+    if !docker_status.status.success() {
+        return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Kubernetes cluster is not running. Please start your Kubernetes cluster."
-        )),
+            "Docker Desktop is not running. Please start Docker Desktop first."
+        ));
+    }
+
+    // Step 3: Enable Kubernetes if not already enabled
+    println!("⏳ Checking Kubernetes status in Docker Desktop...");
+    let k8s_context = Command::new("kubectl")
+        .args(["config", "get-contexts"])
+        .output()?;
+    
+    if !String::from_utf8_lossy(&k8s_context.stdout).contains("docker-desktop") {
+        println!("⚠️ Kubernetes is not enabled in Docker Desktop");
+        println!("🔄 Please enable Kubernetes in Docker Desktop:");
+        println!("1. Open Docker Desktop");
+        println!("2. Go to Settings/Preferences");
+        println!("3. Select 'Kubernetes'");
+        println!("4. Check 'Enable Kubernetes'");
+        println!("5. Click 'Apply & Restart'");
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Kubernetes is not enabled in Docker Desktop"
+        ));
+    }
+
+    // Step 4: Switch to docker-desktop context
+    Command::new("kubectl")
+        .args(["config", "use-context", "docker-desktop"])
+        .output()?;
+
+    // Step 5: Wait for Kubernetes to be ready
+    println!("⏳ Waiting for Kubernetes to be ready...");
+    for i in 0..30 {
+        match Command::new("kubectl").args(["get", "nodes"]).output() {
+            Ok(output) if output.status.success() => {
+                let nodes = String::from_utf8_lossy(&output.stdout);
+                if nodes.contains("Ready") {
+                    println!("✅ Kubernetes is ready!");
+                    return Ok(());
+                }
+            }
+            _ if i == 29 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Kubernetes failed to start after 30 attempts"
+                ));
+            }
+            _ => {
+                print!(".");
+                io::stdout().flush()?;
+                thread::sleep(Duration::from_secs(2));
+            }
+        }
     }
 
     Ok(())
@@ -3917,6 +3963,77 @@ fn check_docker_setup() -> io::Result<()> {
 
     println!("✅ Docker is properly configured");
     Ok(())
+}
+
+fn initialize_kubernetes() -> io::Result<()> {
+    println!("🚀 Initializing Kubernetes environment...");
+
+    // Create essential namespaces
+    let namespaces = ["default", "monitoring", "ingress-nginx"];
+    for namespace in namespaces.iter() {
+        Command::new("kubectl")
+            .args(["create", "namespace", namespace, "--dry-run=client", "-o", "yaml"])
+            .output()?;
+    }
+
+    // Install NGINX Ingress Controller
+    println!("📦 Installing NGINX Ingress Controller...");
+    Command::new("kubectl")
+        .args([
+            "apply",
+            "-f",
+            "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml"
+        ])
+        .output()?;
+
+    // Wait for Ingress Controller to be ready
+    println!("⏳ Waiting for NGINX Ingress Controller...");
+    Command::new("kubectl")
+        .args([
+            "wait",
+            "--namespace", "ingress-nginx",
+            "--for=condition=ready", "pod",
+            "--selector=app.kubernetes.io/component=controller",
+            "--timeout=300s"
+        ])
+        .output()?;
+
+    // Install Metrics Server
+    println!("📊 Installing Metrics Server...");
+    Command::new("kubectl")
+        .args([
+            "apply",
+            "-f",
+            "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
+        ])
+        .output()?;
+
+    println!("✅ Kubernetes environment initialized successfully!");
+    Ok(())
+}
+
+fn handle_kubernetes_error(error: io::Error) -> io::Error {
+    match error.kind() {
+        io::ErrorKind::NotFound => {
+            println!("❌ Kubernetes tools not found");
+            println!("📝 Please ensure:");
+            println!("1. Docker Desktop is installed and running");
+            println!("2. Kubernetes is enabled in Docker Desktop");
+            println!("3. kubectl is installed and in PATH");
+            error
+        },
+        io::ErrorKind::Other => {
+            if error.to_string().contains("connection refused") {
+                println!("❌ Cannot connect to Kubernetes cluster");
+                println!("📝 Please check:");
+                println!("1. Docker Desktop is running");
+                println!("2. Kubernetes is enabled and running (green icon)");
+                println!("3. No firewall is blocking the connection");
+            }
+            error
+        },
+        _ => error
+    }
 }
 
 

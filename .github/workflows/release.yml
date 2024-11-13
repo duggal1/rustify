@@ -24,13 +24,13 @@ jobs:
             binary_name: rustify-darwin-arm64
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     
     - name: Install dependencies (Ubuntu)
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
-        sudo apt-get install -y pkg-config libssl-dev
+        sudo apt-get install -y pkg-config libssl-dev docker.io
         echo "OPENSSL_DIR=/usr" >> $GITHUB_ENV
         echo "OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
         echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
@@ -38,7 +38,7 @@ jobs:
     - name: Install dependencies (macOS)
       if: matrix.os == 'macos-latest'
       run: |
-        brew install openssl@3
+        brew install openssl@3 docker
         OPENSSL_ROOT=$(brew --prefix openssl@3)
         echo "OPENSSL_DIR=$OPENSSL_ROOT" >> $GITHUB_ENV
         echo "OPENSSL_LIB_DIR=$OPENSSL_ROOT/lib" >> $GITHUB_ENV
@@ -50,36 +50,33 @@ jobs:
         toolchain: stable
         target: ${{ matrix.target }}
         override: true
+        components: clippy, rustfmt
 
-    - name: Setup cross-compilation
-      if: matrix.target == 'aarch64-apple-darwin'
-      run: |
-        rustup target add aarch64-apple-darwin
-        
+    - name: Check formatting
+      run: cargo fmt -- --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Run tests
+      run: cargo test --target ${{ matrix.target }}
+
     - name: Build
       env:
         OPENSSL_DIR: ${{ env.OPENSSL_DIR }}
         OPENSSL_LIB_DIR: ${{ env.OPENSSL_LIB_DIR }}
         OPENSSL_INCLUDE_DIR: ${{ env.OPENSSL_INCLUDE_DIR }}
         MACOSX_DEPLOYMENT_TARGET: '10.15'
-      run: |
-        # Print environment for debugging
-        echo "OPENSSL_DIR: $OPENSSL_DIR"
-        echo "OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR"
-        echo "OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
-        
-        cargo build --release --target ${{ matrix.target }}
-        
+      run: cargo build --release --target ${{ matrix.target }}
+
     - name: Package Binary
       run: |
         cd target/${{ matrix.target }}/release
         chmod +x rustify
-        # Create tar with consistent naming
         tar -czf ../../../${{ matrix.binary_name }}.tar.gz rustify
         cd ../../..
-        # Create SHA256 checksum
         shasum -a 256 ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
-      
+
     - name: Upload Release Assets
       uses: softprops/action-gh-release@v1
       with:
