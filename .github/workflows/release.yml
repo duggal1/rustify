@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    permissions: write-all
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Install dependencies (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y pkg-config libssl-dev
+        echo "OPENSSL_DIR=/usr" >> $GITHUB_ENV
+        echo "OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+        echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
+
+    - name: Install dependencies (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install openssl@3
+        OPENSSL_ROOT=$(brew --prefix openssl@3)
+        echo "OPENSSL_DIR=$OPENSSL_ROOT" >> $GITHUB_ENV
+        echo "OPENSSL_LIB_DIR=$OPENSSL_ROOT/lib" >> $GITHUB_ENV
+        echo "OPENSSL_INCLUDE_DIR=$OPENSSL_ROOT/include" >> $GITHUB_ENV
+        
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+
+    - name: Setup cross-compilation
+      if: matrix.target == 'aarch64-apple-darwin'
+      run: |
+        rustup target add aarch64-apple-darwin
+        
+    - name: Build
+      env:
+        OPENSSL_DIR: ${{ env.OPENSSL_DIR }}
+        OPENSSL_LIB_DIR: ${{ env.OPENSSL_LIB_DIR }}
+        OPENSSL_INCLUDE_DIR: ${{ env.OPENSSL_INCLUDE_DIR }}
+        MACOSX_DEPLOYMENT_TARGET: '10.15'
+      run: |
+        # Print environment for debugging
+        echo "OPENSSL_DIR: $OPENSSL_DIR"
+        echo "OPENSSL_LIB_DIR: $OPENSSL_LIB_DIR"
+        echo "OPENSSL_INCLUDE_DIR: $OPENSSL_INCLUDE_DIR"
+        
+        cargo build --release --target ${{ matrix.target }}
+        
+    - name: Package Binary
+      run: |
+        cd target/${{ matrix.target }}/release
+        chmod +x rustify
+        # Create a proper gzipped tar archive
+        tar -czf ../../../rustify-${{ matrix.target }}.tar.gz rustify
+        cd ../../..
+        # Verify the archive
+        tar -tvf rustify-${{ matrix.target }}.tar.gz
+      
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v1
+      with:
+        files: rustify-${{ matrix.target }}.tar.gz
+        token: ${{ secrets.GITHUB_TOKEN }}

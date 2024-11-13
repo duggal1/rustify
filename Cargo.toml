@@ -1,0 +1,33 @@
+[package]
+name = "rustify"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rustify"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true
+
+[dependencies]
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.4.0"
+whoami = "1.4"
+colored = "2.0.4"
+tokio = { version = "1.0", features = ["full"] }
+k8s-openapi = { version = "0.18.0", features = ["v1_26"] }
+kube = { version = "0.82.0", features = ["runtime", "derive"] }
+futures = "0.3"
+parking_lot = "0.12"
+dashmap = "5.4"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+clap = "3.2"
