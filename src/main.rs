@@ -1,5 +1,6 @@
 use std::{env, fs, io::{self, Write}, path::Path, process::Command};
 use chrono::Local;
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 use std::thread;
@@ -10,7 +11,6 @@ use tokio::runtime::Runtime;
 use futures::future::join_all;
 use std::sync::Arc;
 use parking_lot::RwLock;
-use dashmap::DashMap;
 use clap::{App, SubCommand, Arg};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -348,68 +348,125 @@ fn main() {
 }
 
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
-    // 1. Verify Docker setup
-    let docker_manager = DockerManager::new();
-    docker_manager.verify_and_setup_docker()?;
+    println!("🚀 Starting enterprise-grade deployment...");
 
-    // 2. Create necessary files
-    create_app_files(&metadata.app_type, &metadata.port, "src/index.js")?;
-
-    // 3. Initialize monitoring and infrastructure
-    let metrics = Arc::new(RwLock::new(PerformanceMetrics::default()));
-    let cache = Arc::new(DashMap::new());
-    
+    // Initialize async runtime
     let rt = Runtime::new()?;
+    
+    // Setup enterprise infrastructure
     rt.block_on(async {
-        // Store the values we need before the immutable borrow
         let app_name = metadata.app_name.clone();
         let namespace = metadata.kubernetes_metadata.namespace.clone();
-        let app_type = metadata.app_type.clone();
-        let port = metadata.port.clone();
 
-        let monitoring = setup_monitoring(&app_name, &namespace, "active").await.map_err::<io::Error, _>(|e| e.into())?;
-        let caching = setup_caching(cache.clone()).await.map_err::<io::Error, _>(|e| e.into())?;
-        let load_balancing = setup_load_balancing("prod").await.map_err::<io::Error, _>(|e| e.into())?;
-
+        // Setup security and infrastructure
+        setup_security_layer(&app_name, &namespace).await?;
+        setup_redis_cluster().await?;
+        setup_varnish_cache().await?;
+        
         Ok::<(), io::Error>(())
     })?;
 
     if is_prod {
-        // Store the values we need before using them
-        let app_name = metadata.app_name.clone();
-        let app_type = metadata.app_type.clone();
-        let port = metadata.port.clone();
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
-
-        // 4. Deploy to Kubernetes with all optimizations
-        deploy_to_kubernetes(
-            metadata,
-            &app_name,
-            &app_type, 
-            &port,
-            if auto_scale { 3 } else { 1 },
-            &namespace,
-            "prod"
-        )?;
-
-        // 5. Setup HAProxy
-        deploy_haproxy(&namespace)?;
-    } else {
-        // 6. Deploy with Docker for development
-        let dockerfile = generate_dockerfile(&metadata.app_type);
-        fs::write("Dockerfile", dockerfile)?;
+        // Production mode with both Nginx and HAProxy
+        println!("🏭 Deploying production environment...");
         
-        let compose = generate_docker_compose(&metadata.app_name, &metadata.port);
+        // Generate optimized configs
+        generate_nginx_config("prod")?;
+        generate_haproxy_config("prod")?;
+        
+        // Deploy load balancers
+        deploy_haproxy(&metadata.kubernetes_metadata.namespace)?;
+        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
+        
+        // Setup network policies
+        setup_network_policies(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
+        
+    } else {
+        // Development mode with basic setup
+        println!("🛠️ Deploying development environment...");
+        
+        // Generate development configs
+        generate_nginx_config("dev")?;
+        generate_haproxy_config("dev")?;
+        
+        // Start services with docker-compose
+        let compose = generate_enterprise_docker_compose(&metadata.app_name, &metadata.port);
         fs::write("docker-compose.yml", compose)?;
-
+        
         Command::new("docker-compose")
             .args(["up", "-d"])
             .status()?;
     }
 
-    println!("✅ Deployment successful!");
+    println!("✅ Enterprise deployment complete!");
     Ok(())
 }
+
+// Helper function for enterprise docker-compose
+fn generate_enterprise_docker_compose(app_name: &str, port: &str) -> String {
+    format!(
+        r#"version: '3.8'
+services:
+  {app_name}:
+    build: .
+    ports:
+      - "{port}:{port}"
+    environment:
+      - PORT={port}
+      - NODE_ENV=production
+      - BUN_ENV=production
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{port}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - app_net
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - app_net
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    networks:
+      - app_net
+
+  grafana:
+    image: grafana/grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - app_net
+
+networks:
+  app_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+  prometheus_data:
+  grafana_data:"#
+    )
+}
+
 fn create_nextjs_files(port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "nextjs-app",
@@ -638,7 +695,7 @@ app.listen(PORT, () => {
 
     // Create or update .dockerignore
     let dockerignore_content = r#"
-node_modules
+node_modules/
 npm-debug.log
 Dockerfile
 .dockerignore
@@ -1895,5 +1952,294 @@ dist/
     }
     
     println!("{}", GradientText::success("✅ Project initialized successfully!"));
+    Ok(())
+}
+
+async fn setup_security_layer(app_name: &str, namespace: &str) -> io::Result<()> {
+    println!("🔒 Setting up enterprise security layer...");
+    
+    // Setup mTLS certificates
+    let cert_config = r#"
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = CA
+L = San Francisco
+O = Enterprise
+OU = Security
+CN = service.internal
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = *.service.internal
+DNS.2 = localhost"#;
+
+    fs::write("cert.conf", cert_config)?;
+
+    // Generate certificates
+    Command::new("openssl")
+        .args(["req", "-x509", "-nodes", "-days", "365", "-newkey", "rsa:2048",
+               "-keyout", "tls.key", "-out", "tls.crt", "-config", "cert.conf"])
+        .output()?;
+
+    // Apply Zero Trust policies
+    let zero_trust_policy = format!(r#"
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: {app_name}-zero-trust
+  namespace: {namespace}
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        principals: ["cluster.local/ns/{namespace}/sa/{app_name}"]
+    to:
+    - operation:
+        methods: ["GET", "POST"]"#);
+
+    fs::write("zero-trust-policy.yaml", zero_trust_policy)?;
+    
+    Ok(())
+}
+
+async fn setup_redis_cluster() -> io::Result<()> {
+    println!("📦 Setting up Redis cluster...");
+    
+    let redis_config = r#"
+port 6379
+cluster-enabled yes
+cluster-config-file nodes.conf
+cluster-node-timeout 5000
+appendonly yes
+maxmemory 2gb
+maxmemory-policy allkeys-lru"#;
+
+    fs::write("redis.conf", redis_config)?;
+    
+    Ok(())
+}
+
+async fn setup_varnish_cache() -> io::Result<()> {
+    println!("🚀 Setting up Varnish cache...");
+    
+    let vcl_config = r#"
+vcl 4.0;
+
+backend default {
+    .host = "127.0.0.1";
+    .port = "8080";
+    .probe = {
+        .url = "/health";
+        .timeout = 2s;
+        .interval = 5s;
+        .window = 5;
+        .threshold = 3;
+    }
+}
+
+sub vcl_recv {
+    if (req.method == "PURGE") {
+        return(purge);
+    }
+}"#;
+
+    fs::write("default.vcl", vcl_config)?;
+    
+    Ok(())
+}
+
+fn deploy_nginx(namespace: &str) -> io::Result<()> {
+    println!("{}", GradientText::cyber("📦 Deploying Nginx..."));
+
+    // Create Nginx ConfigMap with optimized configuration
+    let nginx_config = format!(r#"
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: {namespace}
+data:
+  nginx.conf: |
+    worker_processes auto;
+    worker_rlimit_nofile 100000;
+    
+    events {{
+        worker_connections 4096;
+        use epoll;
+        multi_accept on;
+    }}
+    
+    http {{
+        # Optimization
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        keepalive_requests 100000;
+        
+        # Bun.js Optimizations
+        upstream bun_servers {{
+            least_conn;
+            server localhost:3000 max_fails=3 fail_timeout=30s;
+            server localhost:3001 max_fails=3 fail_timeout=30s;
+            keepalive 32;
+        }}
+        
+        # Security
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+        ssl_session_cache shared:SSL:50m;
+        ssl_session_timeout 1d;
+        
+        # Compression
+        gzip on;
+        gzip_comp_level 6;
+        gzip_types text/plain text/css application/json application/javascript;
+        
+        server {{
+            listen 80;
+            listen [::]:80;
+            listen 443 ssl http2;
+            
+            # SSL Configuration
+            ssl_certificate /etc/nginx/ssl/tls.crt;
+            ssl_certificate_key /etc/nginx/ssl/tls.key;
+            
+            location / {{
+                proxy_pass http://bun_servers;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_cache_bypass $http_upgrade;
+                
+                # Security headers
+                add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+                add_header X-Frame-Options "SAMEORIGIN" always;
+                add_header X-Content-Type-Options "nosniff" always;
+            }}
+            
+            location /health {{
+                access_log off;
+                return 200 'healthy\n';
+            }}
+        }}
+    }}
+"#);
+
+    fs::write("nginx-config.yaml", nginx_config)?;
+
+    // Apply ConfigMap
+    Command::new("kubectl")
+        .args(["apply", "-f", "nginx-config.yaml"])
+        .output()?;
+
+    // Deploy Nginx with optimized settings
+    let nginx_deployment = format!(r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: {namespace}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9113"
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:mainline
+        ports:
+        - containerPort: 80
+        - containerPort: 443
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+          limits:
+            cpu: "2"
+            memory: "2Gi"
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+        - name: ssl-certs
+          mountPath: /etc/nginx/ssl
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 2
+          periodSeconds: 5
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+      - name: ssl-certs
+        secret:
+          secretName: nginx-ssl-certs
+"#);
+
+    fs::write("nginx-deployment.yaml", nginx_deployment)?;
+
+    Command::new("kubectl")
+        .args(["apply", "-f", "nginx-deployment.yaml"])
+        .output()?;
+
+    // Create Nginx Service
+    let nginx_service = format!(r#"
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: {namespace}
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9113"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+  - name: https
+    port: 443
+    targetPort: 443
+  selector:
+    app: nginx
+"#);
+
+    fs::write("nginx-service.yaml", nginx_service)?;
+
+    Command::new("kubectl")
+        .args(["apply", "-f", "nginx-service.yaml"])
+        .output()?;
+
+    println!("{}", GradientText::success("✅ Nginx deployed successfully"));
     Ok(())
 }
