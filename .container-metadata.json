@@ -1,0 +1,16 @@
+{
+  "app_name": "myapp",
+  "app_type": "nextjs",
+  "port": "3000",
+  "created_at": "2024-11-13T00:20:19.110798+05:30",
+  "container_id": "e364c19fd077711cace1c3d0249c234a51e9ced0279c82098090e4ad36f44b7c",
+  "status": "running",
+  "kubernetes": {
+    "namespace": "",
+    "deployment_name": "",
+    "service_name": "",
+    "replicas": 1,
+    "pod_status": [],
+    "ingress_host": null
+  }
+}
