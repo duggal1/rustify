@@ -29,33 +29,39 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Detect OS and architecture
+# Detect OS and architecture more accurately
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
-# Set binary name based on OS and architecture
-case "${OS}" in
-    "linux")
-        echo -e "${CYAN}📡 ${BLUE}Detected Linux operating system${NC}"
-        BINARY_NAME="rustify-x86_64-unknown-linux-gnu.tar.gz"
+case "$ARCH" in
+    "x86_64")
+        ARCH="amd64"
         ;;
-    "darwin")
-        echo -e "${CYAN}📡 ${BLUE}Detected macOS operating system${NC}"
-        if [ "$ARCH" = "arm64" ]; then
-            BINARY_NAME="rustify-aarch64-apple-darwin.tar.gz"
-        else
-            BINARY_NAME="rustify-x86_64-apple-darwin.tar.gz"
-        fi
+    "aarch64" | "arm64")
+        ARCH="arm64"
         ;;
     *)
-        echo -e "${RED}❌ ${PURPLE}Unsupported operating system: $OS${NC}"
+        echo -e "${RED}❌ Unsupported architecture: $ARCH${NC}"
         exit 1
         ;;
 esac
 
+# Set binary name based on OS and architecture
+BINARY_NAME="rustify-${OS}-${ARCH}.tar.gz"
+
 # GitHub repository information
 GITHUB_REPO="duggal1/rustify"
-VERSION="v0.1.0"  # Update this when you release new versions
+LATEST_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+
+# Get latest version dynamically
+echo -e "${CYAN}📡 Fetching latest version...${NC}"
+VERSION=$(curl -sL $LATEST_URL | grep '"tag_name":' | cut -d'"' -f4)
+
+if [ -z "$VERSION" ]; then
+    echo -e "${RED}❌ Failed to fetch latest version${NC}"
+    exit 1
+fi
+
 DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${BINARY_NAME}"
 
 # Download the binary
@@ -138,3 +144,13 @@ echo -e "${CYAN}🔧 ${BLUE}Run 'rustify --help' to get started${NC}"
 # Print version
 echo -e "${CYAN}📋 ${BLUE}Installed version:${NC}"
 "$INSTALL_DIR/rustify" --version || echo -e "${RED}Version information not available${NC}"
+
+# Verify checksum
+echo -e "${CYAN}🔒 Verifying binary integrity...${NC}"
+CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+curl -sL "$CHECKSUM_URL" > "$TMP_DIR/checksum"
+cd "$TMP_DIR"
+sha256sum -c checksum || {
+    echo -e "${RED}❌ Checksum verification failed${NC}"
+    exit 1
+}
