@@ -1512,26 +1512,35 @@ spec:
 }
 
 async fn setup_monitoring(app_name: &str, namespace: &str, mode: &str) -> io::Result<()> {
-    // Configure Prometheus monitoring
-    let monitoring_config = format!(
-        r#"apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: {app_name}-monitor
-  namespace: {namespace}
-spec:
-  selector:
-    matchLabels:
-      app: {app_name}
-  endpoints:
-  - port: metrics"#
-    );
+    let prometheus_config = r#"
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+      - job_name: 'bun-metrics'
+        static_configs:
+          - targets: ['localhost:3000']
+        metrics_path: '/metrics'
+    "#;
 
-    fs::write("monitoring.yaml", monitoring_config)?;
-    Command::new("kubectl")
-        .args(["apply", "-f", "monitoring.yaml"])
-        .output()?;
+    let grafana_dashboard = r#"
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Bun.js Performance",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "type": "graph",
+            "datasource": "Prometheus"
+          }
+        ]
+      }
+    }"#;
 
+    fs::write("prometheus.yml", prometheus_config)?;
+    fs::write("grafana-dashboard.json", grafana_dashboard)?;
     Ok(())
 }
 
@@ -1718,62 +1727,23 @@ fn check_kubernetes_status() -> io::Result<()> {
 }
 
 fn generate_haproxy_config(mode: &str) -> io::Result<()> {
-    let config = format!(r#"global
-    maxconn 100000
-    log /dev/log local0
-    user haproxy
-    group haproxy
-    daemon
-    nbproc 4
-    cpu-map auto:1/1-4 0-3
-    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256
-    ssl-default-bind-options no-sslv3 no-tlsv10 no-tlsv11
-
-defaults
-    log global
-    mode http
-    option httplog
-    option dontlognull
-    option forwardfor
-    option http-server-close
-    timeout connect 5000
-    timeout client 50000
-    timeout server 50000
-    timeout http-request 15s
-    timeout http-keep-alive 15s
-
-frontend stats
-    bind *:8404
-    stats enable
-    stats uri /stats
-    stats refresh 10s
-    stats admin if LOCALHOST
-
-frontend http_front
-    bind *:80
-    bind *:443 ssl crt /etc/ssl/private/cert.pem
-    http-request redirect scheme https unless {{ ssl_fc }}
-    
-    # Advanced security headers
-    http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-    http-response set-header X-Frame-Options "SAMEORIGIN"
-    http-response set-header X-Content-Type-Options "nosniff"
-    
-    # Rate limiting
-    stick-table type ip size 100k expire 30s store conn_cur,conn_rate(3s),http_req_rate(10s)
-    http-request track-sc0 src
-    http-request deny deny_status 429 if {{ sc_http_req_rate(0) gt 10 }}
-    
-    default_backend apps
-
-backend apps
-    balance roundrobin
-    option httpchk HEAD /health HTTP/1.1\r\nHost:\ localhost
-    http-check expect status 200
-    server app1 127.0.0.1:3000 check weight 100 maxconn 3000
-    server app2 127.0.0.1:3001 check weight 100 maxconn 3000
-    "#
-    );
+    let config = format!(r#"
+    backend apps
+        balance first
+        hash-type consistent
+        stick-table type string len 32 size 100k expire 30m
+        stick store-request req.cook(sessionid)
+        
+        # Advanced health checks
+        option httpchk HEAD /health HTTP/1.1\r\nHost:\ localhost
+        http-check expect status 200
+        
+        # Circuit breaker
+        default-server inter 3s fall 3 rise 2 on-marked-down shutdown-sessions
+        
+        # Dynamic server discovery
+        server-template app- 20 127.0.0.1:3000-3020 check resolvers docker init-addr none
+    "#);
 
     fs::write("haproxy.cfg", config)?;
     Ok(())
@@ -1846,20 +1816,61 @@ fn verify_kubernetes_setup() -> io::Result<()> {
 }
 
 // Add high-performance caching layer
-async fn setup_caching(cache: Arc<DashMap<String, Vec<u8>>>) -> io::Result<()> {
-    // Initialize Redis connection
-    let redis_config = r#"
-maxmemory 2gb
-maxmemory-policy allkeys-lru
-activerehashing yes
-appendonly yes
-appendfsync everysec
-no-appendfsync-on-rewrite yes
-auto-aof-rewrite-percentage 100
-auto-aof-rewrite-min-size 64mb
-"#;
-    fs::write("redis.conf", redis_config)?;
+async fn setup_caching_layer() -> io::Result<()> {
+    // Multi-layer caching
+    setup_redis_cluster().await?;
+    setup_varnish_cache().await?;
+    // Add Traefik integration for edge caching and CDN
+    let traefik_config = r#"
+    kind: ConfigMap
+    metadata:
+      name: traefik-config
+    data:
+      TRAEFIK_PROVIDERS_FILE_FILENAME: "/config/dynamic.yaml"
+      TRAEFIK_API_INSECURE: "false"
+      TRAEFIK_API_DASHBOARD: "true"
+      TRAEFIK_ENTRYPOINTS_WEB_ADDRESS: ":80"
+      TRAEFIK_ENTRYPOINTS_WEBSECURE_ADDRESS: ":443"
+      TRAEFIK_CERTIFICATESRESOLVERS_DEFAULT_ACME_EMAIL: "admin@example.com"
+      TRAEFIK_CERTIFICATESRESOLVERS_DEFAULT_ACME_STORAGE: "/certs/acme.json"
+      TRAEFIK_CERTIFICATESRESOLVERS_DEFAULT_ACME_HTTPCHALLENGE_ENTRYPOINT: "web"
+    "#;
+
+    // Configure caching middleware
+    let caching_config = r#"
+    kind: Middleware
+    metadata:
+      name: cache-middleware
+    spec:
+      headers:
+        browserXssFilter: true
+        customResponseHeaders:
+          Cache-Control: "public, max-age=3600"
+          X-Cache-Status: "HIT"
+    "#;
+    let edge_rules = r#"
+    cache:
+      rules:
+        - pattern: "/*"
+          edge_ttl: 2h
+          browser_ttl: 30m
+    "#;
     
+    fs::write("traefik-config.yaml", traefik_config)?;
+    fs::write("caching-config.yaml", caching_config)?;
+    fs::write("edge-rules.yaml", edge_rules)?;
+
+    // Apply configurations
+    Command::new("kubectl")
+        .args(["apply", "-f", "traefik-config.yaml"])
+        .output()?;
+    Command::new("kubectl")
+        .args(["apply", "-f", "caching-config.yaml"])
+        .output()?;
+    Command::new("kubectl")
+        .args(["apply", "-f", "edge-rules.yaml"])
+        .output()?;
+
     Ok(())
 }
 
@@ -2241,5 +2252,75 @@ spec:
         .output()?;
 
     println!("{}", GradientText::success("✅ Nginx deployed successfully"));
+    Ok(())
+}
+
+fn optimize_kernel_parameters() -> io::Result<()> {
+    let sysctl_config = r#"
+    # Network optimizations
+    net.core.somaxconn = 65535
+    net.ipv4.tcp_max_tw_buckets = 1440000
+    net.ipv4.ip_local_port_range = 1024 65535
+    net.ipv4.tcp_fin_timeout = 15
+    net.ipv4.tcp_keepalive_time = 300
+    net.ipv4.tcp_max_syn_backlog = 262144
+    net.core.netdev_max_backlog = 262144
+    
+    # Memory optimizations
+    vm.swappiness = 10
+    vm.dirty_ratio = 60
+    vm.dirty_background_ratio = 2
+    "#;
+    
+    fs::write("/etc/sysctl.d/99-performance.conf", sysctl_config)?;
+    Command::new("sysctl").args(["-p"]).output()?;
+    Ok(())
+}
+
+fn optimize_bun_runtime() -> io::Result<()> {
+    let config = r#"
+    {
+      "runtime": {
+        "watch": false,
+        "minify": true,
+        "jsx": "react",
+        "jsxImportSource": "react",
+        "define": {
+          "process.env.NODE_ENV": "production"
+        },
+        "performance": {
+          "maxWorkers": "auto",
+          "workerThreads": true,
+          "asyncCompression": true,
+          "gcInterval": 120000,
+          "maxOldSpaceSize": 4096
+        }
+      }
+    }"#;
+    
+    fs::write("bunfig.toml", config)?;
+    Ok(())
+}
+
+fn enhance_load_balancer_config() -> io::Result<()> {
+    let config = r#"
+    backend dynamic_servers {
+        dynamic
+        check
+        balance roundrobin
+        hash-type consistent
+        server-template bun 10 127.0.0.1:3000-3010 check
+        stick-table type ip size 1m expire 30m
+        stick store-request req.cook(sessionid)
+        
+        # Circuit breaker
+        default-server inter 1s fastinter 100ms downinter 10s fall 3 rise 2
+        
+        # Health checks
+        option httpchk HEAD /health HTTP/1.1
+        http-check expect status 200
+    }
+    "#;
+    fs::write("haproxy-dynamic.cfg", config)?;
     Ok(())
 }
