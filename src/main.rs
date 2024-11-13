@@ -292,7 +292,7 @@ impl DockerManager {
         io::stdin().read_line(&mut input)?;
         
         if input.trim().to_lowercase() == "y" {
-            println!("🔄 Restarting system...");
+            println!("🔄 Restarting system please wait...");
             #[cfg(target_os = "macos")]
             Command::new("sudo")
                 .args(["shutdown", "-r", "now"])
