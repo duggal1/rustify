@@ -840,6 +840,7 @@ README.md
 
 fn generate_dockerfile(app_type: &str) -> String {
     let base = r#"
+# Multi-stage build for optimization
 FROM node:18-alpine AS builder
 
 # Install system dependencies
@@ -849,7 +850,11 @@ RUN apk add --no-cache \
     nginx \
     supervisor \
     redis \
-    postgresql-client
+    postgresql-client \
+    git \
+    python3 \
+    make \
+    g++
 
 # Install Bun with version pinning
 ARG BUN_VERSION=1.0.0
@@ -863,23 +868,85 @@ RUN npm install -g clinic autocannon
 ENV NODE_ENV=production
 ENV BUN_JS_ALLOCATIONS=1000000
 ENV BUN_RUNTIME_CALLS=100000
+ENV NEXT_TELEMETRY_DISABLED=1
 
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-"#;
+# Copy the entire project
+COPY . .
+
+# Preserve user's package.json but add optimizations if needed
+RUN if [ -f "package.json" ]; then \
+    # Backup original package.json
+    cp package.json package.json.original && \
+    # Add optimization scripts if they don't exist
+    jq '. * {"scripts": {. .scripts + {"analyze": "ANALYZE=true next build"}}}' package.json.original > package.json; \
+    fi
+
+# Install dependencies based on existing package-lock.json or yarn.lock
+RUN if [ -f "yarn.lock" ]; then \
+        yarn install --frozen-lockfile --production; \
+    elif [ -f "package-lock.json" ]; then \
+        npm ci --production; \
+    else \
+        bun install --production; \
+    fi
+
+# Build the application
+RUN bun run build
+
+# Production image
+FROM node:18-alpine AS runner
+WORKDIR /app
+
+# Copy necessary files from builder
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/next.config.js ./next.config.js
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /root/.bun /root/.bun
+
+# Copy all other project files except those in .dockerignore
+COPY --from=builder /app/. .
+
+# Install production dependencies only
+ENV NODE_ENV=production
+ENV PATH="/root/.bun/bin:${PATH}"
+
+# Runtime optimizations
+ENV BUN_JS_ALLOCATIONS=1000000
+ENV BUN_RUNTIME_CALLS=100000
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Set up health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/api/health || exit 1
+
+# Expose ports
+EXPOSE 3000
+
+# Start the application with clustering
+CMD ["bun", "run", "start"]"#;
 
     // Add framework-specific optimizations
     let framework_optimizations = match app_type {
         "nextjs" => r#"
-# Next.js optimizations
-RUN bun install --production
-RUN bun run build
 
-# Enable compression and caching
-RUN bun add compression helmet redis connect-redis"#,
-        // Add other framework optimizations...
+# Next.js specific optimizations
+RUN bun add \
+    compression \
+    helmet \
+    redis \
+    connect-redis \
+    @sentry/nextjs \
+    sharp \
+    next-pwa
+
+# Enable source maps for production debugging
+ENV NEXT_SHARP_PATH=/usr/local/lib/node_modules/sharp
+ENV NEXT_OPTIMIZE_IMAGES=true
+ENV NEXT_OPTIMIZE_CSS=true"#,
         _ => ""
     };
 
@@ -1481,7 +1548,7 @@ spec:
 fn print_kubernetes_status(metadata: &AppMetadata) {
     println!("\n{}", GradientText::cyber("📊 Kubernetes Status:"));
     println!("{}", GradientText::status(&format!("   • Namespace: {}", metadata.kubernetes_metadata.namespace)));
-    println!("{}", GradientText::status(&format!("   • Deployment: {}", metadata.kubernetes_metadata.deployment_name)));
+    println!("{}", GradientText::status(&format!("    Deployment: {}", metadata.kubernetes_metadata.deployment_name)));
     println!("{}", GradientText::status(&format!("   • Service: {}", metadata.kubernetes_metadata.service_name)));
     println!("{}", GradientText::status(&format!("   • Replicas: {}", metadata.kubernetes_metadata.replicas)));
     println!("{}", GradientText::status(&format!("   • Pod Status: {:?}", metadata.kubernetes_metadata.pod_status)));
@@ -2454,5 +2521,342 @@ fn enhance_load_balancer_config() -> io::Result<()> {
     }
     "#;
     fs::write("haproxy-dynamic.cfg", config)?;
+    Ok(())
+}
+
+fn create_nextjs_optimized_config() -> io::Result<()> {
+    // Enhanced Next.js + TypeScript configuration
+    let next_config = r#"
+    module.exports = {
+      reactStrictMode: true,
+      experimental: {
+        serverActions: true,
+        serverComponents: true,
+        concurrentFeatures: true,
+        optimizeCss: true,
+        optimizeImages: true,
+        scrollRestoration: true,
+        runtime: 'experimental-edge',
+      },
+      compiler: {
+        removeConsole: process.env.NODE_ENV === 'production',
+      },
+      typescript: {
+        ignoreBuildErrors: false,
+        tsconfigPath: './tsconfig.json'
+      },
+      // Bun.js optimizations
+      webpack: (config) => {
+        config.experiments = { topLevelAwait: true };
+        config.cache = {
+          type: 'filesystem',
+          buildDependencies: {
+            config: [__filename],
+          },
+        };
+        return config;
+      },
+    }"#;
+
+    let tsconfig = r#"{
+      "compilerOptions": {
+        "target": "esnext",
+        "lib": ["dom", "dom.iterable", "esnext"],
+        "allowJs": true,
+        "skipLibCheck": true,
+        "strict": true,
+        "forceConsistentCasingInFileNames": true,
+        "noEmit": true,
+        "incremental": true,
+        "esModuleInterop": true,
+        "module": "esnext",
+        "moduleResolution": "node",
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "jsx": "preserve"
+      },
+      "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+      "exclude": ["node_modules"]
+    }"#;
+
+    fs::write("next.config.js", next_config)?;
+    fs::write("tsconfig.json", tsconfig)?;
+    Ok(())
+}
+
+fn validate_nextjs_project() -> io::Result<bool> {
+    // Check for essential Next.js files and directories
+    let required_files = vec![
+        "package.json",
+        "next.config.js",
+        "tsconfig.json",
+    ];
+
+    let required_dirs = vec![
+        "src",
+        "public",
+        "app",
+        "components",
+        "pages",
+    ];
+
+    // Optional but common directories
+    let optional_dirs = vec![
+        "api",
+        "lib",
+        "utils",
+        "hooks",
+        "services",
+        "redux",
+        "store",
+        "styles",
+        "types",
+    ];
+
+    // Validate package.json for Next.js dependencies
+    if Path::new("package.json").exists() {
+        let package_json = fs::read_to_string("package.json")?;
+        let pkg: serde_json::Value = serde_json::from_str(&package_json)?;
+        
+        if let Some(deps) = pkg.get("dependencies") {
+            if !deps.get("next").is_some() {
+                println!("⚠️ Warning: Next.js dependency not found in package.json");
+                return Ok(false);
+            }
+        }
+    }
+
+    // Check required files and directories
+    let has_required = required_files.iter().all(|f| Path::new(f).exists()) &&
+                      required_dirs.iter().any(|d| Path::new(d).exists());
+
+    // Count optional directories for optimization level
+    let optional_count = optional_dirs.iter()
+        .filter(|d| Path::new(d).exists())
+        .count();
+
+    Ok(has_required)
+}
+
+fn optimize_existing_nextjs_project() -> io::Result<()> {
+    println!("🔍 Analyzing existing Next.js project...");
+
+    // Backup existing configuration
+    if Path::new("next.config.js").exists() {
+        fs::copy("next.config.js", "next.config.js.backup")?;
+    }
+
+    // Read existing next.config.js
+    let existing_config = if Path::new("next.config.js").exists() {
+        fs::read_to_string("next.config.js")?
+    } else {
+        String::new()
+    };
+
+    // Merge with our optimized config
+    let optimized_config = r#"
+    const nextConfig = {
+      reactStrictMode: true,
+      experimental: {
+        serverActions: true,
+        serverComponents: true,
+        concurrentFeatures: true,
+        optimizeCss: true,
+        optimizeImages: true,
+        scrollRestoration: true,
+        runtime: 'experimental-edge',
+        turbo: {
+          loaders: {
+            '.js': ['bun-loader'],
+            '.ts': ['bun-loader'],
+            '.tsx': ['bun-loader'],
+          },
+        },
+      },
+      compiler: {
+        removeConsole: process.env.NODE_ENV === 'production',
+        styledComponents: true,
+      },
+      typescript: {
+        ignoreBuildErrors: false,
+        tsconfigPath: './tsconfig.json'
+      },
+      webpack: (config, { dev, isServer }) => {
+        // Keep existing webpack config
+        if (typeof existingWebpackConfig === 'function') {
+          config = existingWebpackConfig(config, { dev, isServer });
+        }
+
+        // Add our optimizations
+        config.experiments = { 
+          topLevelAwait: true,
+          layers: true,
+        };
+        
+        config.cache = {
+          type: 'filesystem',
+          buildDependencies: {
+            config: [__filename],
+          },
+          compression: 'brotli',
+          profile: true,
+        };
+
+        // Optimize production builds
+        if (!dev) {
+          config.optimization = {
+            ...config.optimization,
+            minimize: true,
+            moduleIds: 'deterministic',
+            runtimeChunk: 'single',
+            splitChunks: {
+              chunks: 'all',
+              minSize: 20000,
+              minChunks: 1,
+              maxAsyncRequests: 30,
+              maxInitialRequests: 30,
+              cacheGroups: {
+                default: false,
+                vendors: false,
+                framework: {
+                  chunks: 'all',
+                  name: 'framework',
+                  test: /(?<!node_modules.*)[\\/]node_modules[\\/](react|react-dom|scheduler|prop-types|use-subscription)[\\/]/,
+                  priority: 40,
+                  enforce: true,
+                },
+                lib: {
+                  test: /[\\/]node_modules[\\/]/,
+                  name(module) {
+                    return `lib.${module.context.match(/[\\/]node_modules[\\/](.*?)([\\/]|$)/)[1].replace('@', '')}`;
+                  },
+                  priority: 30,
+                  minChunks: 1,
+                  reuseExistingChunk: true,
+                },
+              },
+            },
+          };
+        }
+
+        return config;
+      },
+      // Advanced caching strategy
+      onDemandEntries: {
+        maxInactiveAge: 60 * 60 * 1000,
+        pagesBufferLength: 5,
+      },
+    }
+
+    module.exports = nextConfig;
+    "#;
+
+    fs::write("next.config.js", optimized_config)?;
+    use serde_json::json; // Import the json macro
+
+    // Update package.json with optimized scripts and dependencies
+    if Path::new("package.json").exists() {
+        let mut package_json: serde_json::Value = serde_json::from_str(&fs::read_to_string("package.json")?)?;
+        
+        // Add optimized scripts
+        if let Some(scripts) = package_json.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+            scripts.insert("dev".to_string(), json!("next dev -p 3000"));
+            scripts.insert("build".to_string(), json!("next build"));
+            scripts.insert("start".to_string(), json!("next start -p 3000"));
+            scripts.insert("analyze".to_string(), json!("ANALYZE=true next build"));
+            scripts.insert("lint".to_string(), json!("next lint && prettier --write ."));
+        }
+
+        fs::write("package.json", serde_json::to_string_pretty(&package_json)?)?;
+    }
+
+    println!("✅ Next.js project optimized successfully!");
+    Ok(())
+}
+
+fn create_enhanced_dockerignore() -> io::Result<()> {
+    let dockerignore = r#"
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Testing
+coverage
+.nyc_output
+cypress/videos
+cypress/screenshots
+
+# Next.js build output
+.next
+out
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env*.local
+.env.development
+.env.test
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build files
+*.log
+*.pid
+*.seed
+
+# Cache
+.eslintcache
+.cache
+.parcel-cache
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.temp
+.temp
+.tmp
+
+# Keep these files
+!package.json
+!package-lock.json
+!yarn.lock
+!next.config.js
+!tsconfig.json
+!public/
+!src/
+!app/
+!pages/
+!components/
+!styles/
+!lib/
+!utils/
+!hooks/
+!services/
+!api/
+!types/
+"#;
+
+    fs::write(".dockerignore", dockerignore.trim())?;
     Ok(())
 }
