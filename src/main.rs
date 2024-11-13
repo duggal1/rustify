@@ -3392,66 +3392,6 @@ fn optimize_mern_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     Ok(())
 }
 
-fn create_framework_configs(app_type: &str) -> io::Result<()> {
-    match app_type {
-        "nextjs" => {
-            // Create Next.js specific files
-            create_next_config()?;
-            create_next_typescript_config()?;
-        },
-        "react" => {
-            // Create React specific files
-            create_react_config()?;
-            create_babel_config()?;
-            create_react_typescript_config()?;
-        },
-        "vue" => {
-            // Create Vue specific files
-            create_vue_config()?;
-            create_vue_typescript_config()?;
-        },
-        "svelte" => {
-            // Create Svelte specific files
-            create_svelte_config()?;
-            create_vite_config("svelte")?;
-        },
-        "angular" => {
-            // Create Angular specific files
-            create_editor_config()?;
-            create_angular_typescript_config()?;
-            create_angular_webpack_config()?;
-        },
-        "astro" => {
-            // Create Astro specific files
-            create_astro_config()?;
-            create_astro_typescript_config()?;
-        },
-        "remix" => {
-            // Create Remix specific files
-            create_remix_config()?;
-            create_remix_server_config()?;
-        },
-        "mern" => {
-            // Create MERN specific files
-            create_mern_client_config()?;
-            create_mern_server_config()?;
-            create_mern_db_config()?;
-            create_mern_deployment_config()?;
-        },
-        _ => return Ok(()),
-    }
-
-    // Common configurations for all frameworks
-    create_eslint_config(app_type)?;
-    create_prettier_config()?;
-    create_editor_config()?;
-
-    create_docker_compose(app_type)?;
-   
-
-    Ok(())
-}
-
 // Helper functions for creating specific configurations
 fn create_eslint_config(app_type: &str) -> io::Result<()> {
     let eslint_config = match app_type {
@@ -4025,3 +3965,160 @@ module.exports = {
 
     Ok(())
 }
+
+
+
+
+fn create_framework_configs(app_type: &str) -> io::Result<()> {
+    match app_type {
+        "nextjs" => {
+            let next_config = r#"
+            module.exports = {
+                swcMinify: true,
+                optimizeFonts: true,
+                images: { unoptimized: false },
+                compiler: { removeConsole: process.env.NODE_ENV === 'production' }
+            }"#;
+            fs::write("next.config.js", next_config)?;
+        },
+        "react" => {
+            let vite_config = r#"
+            import { defineConfig } from 'vite'
+            import react from '@vitejs/plugin-react'
+            
+            export default defineConfig({
+                plugins: [react()],
+                build: {
+                    minify: 'terser',
+                    sourcemap: false,
+                    rollupOptions: { output: { manualChunks: { vendor: ['react', 'react-dom'] } } }
+                }
+            })"#;
+            fs::write("vite.config.js", vite_config)?;
+        },
+        "vue" => {
+            let vue_config = r#"
+            module.exports = {
+                productionSourceMap: false,
+                chainWebpack: config => {
+                    config.optimization.splitChunks({ chunks: 'all' });
+                }
+            }"#;
+            fs::write("vue.config.js", vue_config)?;
+        },
+        "svelte" => {
+            let vite_config = r#"
+            import { defineConfig } from 'vite';
+            import { svelte } from '@sveltejs/vite-plugin-svelte';
+            
+            export default defineConfig({
+                plugins: [svelte()],
+                build: { minify: 'terser', sourcemap: false }
+            })"#;
+            fs::write("vite.config.js", vite_config)?;
+        },
+        "angular" => {
+            let angular_config = r#"{
+                "projects": {
+                    "app": {
+                        "architect": {
+                            "build": {
+                                "configurations": {
+                                    "production": {
+                                        "optimization": true,
+                                        "aot": true,
+                                        "buildOptimizer": true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }"#;
+            fs::write("angular.json", angular_config)?;
+        },
+        "astro" => {
+            let astro_config = r#"
+            export default {
+                output: 'static',
+                build: { inlineStylesheets: 'auto' },
+                compressHTML: true
+            }"#;
+            fs::write("astro.config.mjs", astro_config)?;
+        },
+        "remix" => {
+            let remix_config = r#"
+            module.exports = {
+                serverBuildTarget: "vercel",
+                serverMinify: true,
+                future: { v2_routeConvention: true }
+            }"#;
+            fs::write("remix.config.js", remix_config)?;
+        },
+        "mern" => {
+            // Client config (React)
+            let client_config = r#"
+            module.exports = {
+                webpack: {
+                    configure: {
+                        optimization: {
+                            splitChunks: { chunks: 'all' },
+                            minimize: true
+                        }
+                    }
+                }
+            }"#;
+            fs::create_dir_all("client")?;
+            fs::write("client/craco.config.js", client_config)?;
+
+            // Server config (Express)
+            let server_config = r#"
+            module.exports = {
+                mongodb: {
+                    url: process.env.MONGODB_URI,
+                    options: { useUnifiedTopology: true }
+                },
+                cors: { origin: process.env.CLIENT_URL },
+                compression: { level: 6 }
+            }"#;
+            fs::create_dir_all("server")?;
+            fs::write("server/config.js", server_config)?;
+        },
+        _ => return Ok(()),
+    }
+
+    // Common optimizations for all frameworks
+    create_common_configs()?;
+    Ok(())
+}
+
+fn create_common_configs() -> io::Result<()> {
+    // Create .gitignore
+    let gitignore = r#"
+node_modules
+dist
+build
+.env
+*.log"#;
+    fs::write(".gitignore", gitignore)?;
+
+    // Create simple GitHub workflow
+    fs::create_dir_all(".github/workflows")?;
+    let workflow = r#"
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+      - run: npm ci
+      - run: npm run build"#;
+    fs::write(".github/workflows/ci.yml", workflow)?;
+
+    Ok(())
+}
+
+
+
