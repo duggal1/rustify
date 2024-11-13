@@ -11,6 +11,27 @@ NC='\033[0m' # No Color
 
 echo -e "${PURPLE}✨ ${CYAN}Installing rustify CLI...${NC}"
 
+# Check for Docker installation
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        echo -e "${CYAN}🐳 ${BLUE}Installing Docker...${NC}"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            echo -e "${PURPLE}Please install Docker Desktop from https://www.docker.com/products/docker-desktop${NC}"
+            exit 1
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            sudo usermod -aG docker $USER
+            echo -e "${GREEN}✅ ${CYAN}Docker installed successfully${NC}"
+        fi
+    else
+        echo -e "${GREEN}✅ ${CYAN}Docker is already installed${NC}"
+    fi
+}
+
+# Add Docker check
+check_docker
+
 # Check for required tools
 command -v curl >/dev/null 2>&1 || { 
     echo -e "${RED}❌ ${PURPLE}curl is required but not installed. Please install curl first.${NC}"
@@ -45,7 +66,6 @@ case "$ARCH" in
         exit 1
         ;;
 esac
-
 # Set binary name based on OS and architecture
 BINARY_NAME="rustify-${OS}-${ARCH}.tar.gz"
 
@@ -154,3 +174,4 @@ sha256sum -c checksum || {
     echo -e "${RED}❌ Checksum verification failed${NC}"
     exit 1
 }
+

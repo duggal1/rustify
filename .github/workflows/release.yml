@@ -15,10 +15,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            binary_name: rustify-linux-amd64
           - os: macos-latest
             target: x86_64-apple-darwin
+            binary_name: rustify-darwin-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
+            binary_name: rustify-darwin-arm64
 
     steps:
     - uses: actions/checkout@v2
@@ -71,14 +74,16 @@ jobs:
       run: |
         cd target/${{ matrix.target }}/release
         chmod +x rustify
-        # Create a proper gzipped tar archive
-        tar -czf ../../../rustify-${{ matrix.target }}.tar.gz rustify
+        # Create tar with consistent naming
+        tar -czf ../../../${{ matrix.binary_name }}.tar.gz rustify
         cd ../../..
-        # Verify the archive
-        tar -tvf rustify-${{ matrix.target }}.tar.gz
+        # Create SHA256 checksum
+        shasum -a 256 ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
       
-    - name: Upload Release Asset
+    - name: Upload Release Assets
       uses: softprops/action-gh-release@v1
       with:
-        files: rustify-${{ matrix.target }}.tar.gz
+        files: |
+          ${{ matrix.binary_name }}.tar.gz
+          ${{ matrix.binary_name }}.tar.gz.sha256
         token: ${{ secrets.GITHUB_TOKEN }}

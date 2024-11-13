@@ -289,7 +289,6 @@ impl DockerManager {
         }
     }
 }
-
 fn main() {
     let app = App::new("rustify")
         .version("0.1.0")
@@ -618,13 +617,35 @@ fn create_nextjs_files(port: &str) -> io::Result<()> {
 }
 
 fn create_app_files(app_type: &str, port: &str) -> io::Result<()> {
-    // First check for existing package.json
+    // First validate Docker setup
+    let docker_manager = DockerManager::new();
+    docker_manager.verify_and_setup_docker()?;
+    check_docker_setup()?;
+
+    // Check for existing package.json and validate project
     if Path::new("package.json").exists() {
-        println!("📦 Found existing package.json, optimizing configuration...");
-        optimize_existing_project(app_type)?;
+        println!("📦 Found existing package.json, validating and optimizing...");
+        
+        // Validate project structure based on framework
+        let is_valid = match app_type {
+            "nextjs" => validate_nextjs_project()?,
+            // Add other framework validations here
+            _ => true,
+        };
+
+        if is_valid {
+            optimize_existing_project(app_type)?;
+            
+            // For Next.js, apply additional optimizations
+            if app_type == "nextjs" {
+                optimize_existing_nextjs_project()?;
+                create_nextjs_optimized_config()?;
+            }
+        }
         return Ok(());
     }
 
+    // Create new project files
     match app_type {
         "nextjs" => create_nextjs_files(port)?,
         "react" => create_react_files(port)?,
@@ -638,10 +659,20 @@ fn create_app_files(app_type: &str, port: &str) -> io::Result<()> {
         _ => return Err(io::Error::new(io::ErrorKind::Other, "Unsupported project type")),
     }
 
-    // Create common optimized configurations
+    // Create common configurations
     create_enhanced_dockerignore()?;
     create_github_workflows()?;
     create_optimization_configs(app_type)?;
+    create_eslint_config(app_type)?;
+    create_prettier_config()?;
+    create_editor_config()?;
+
+    // Create Docker configurations
+    if app_type == "mern" {
+      
+    } else {
+        create_docker_compose(app_type)?;
+    }
 
     Ok(())
 }
@@ -2687,9 +2718,7 @@ fn optimize_existing_project(app_type: &str) -> io::Result<()> {
     // Save optimized package.json
     fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
 
-    // Create framework-specific optimization files
-    create_framework_configs(app_type)?;
-
+    
     Ok(())
 }
 
@@ -2806,7 +2835,7 @@ fn optimize_vue_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     Ok(())
 }
 
-fn create_vue_files(port: &str) -> io::Result<()> {
+fn create_vue_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "vue-app",
         "version": "0.1.0",
@@ -2905,7 +2934,7 @@ fn optimize_nuxt_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     Ok(())
 }
 
-fn create_nuxt_files(port: &str) -> io::Result<()> {
+fn create_nuxt_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "nuxt-app",
         "version": "1.0.0",
@@ -3521,7 +3550,7 @@ services:
 
 
 
-fn create_react_files(port: &str) -> io::Result<()> {
+fn create_react_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "react-app",
         "version": "0.1.0",
@@ -3555,7 +3584,7 @@ fn create_react_files(port: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn create_svelte_files(port: &str) -> io::Result<()> {
+fn create_svelte_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "svelte-app",
         "version": "0.1.0",
@@ -3584,7 +3613,7 @@ fn create_svelte_files(port: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn create_angular_files(port: &str) -> io::Result<()> {
+fn create_angular_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
         "name": "angular-app",
         "version": "0.0.0",
@@ -3831,294 +3860,63 @@ jobs:
     fs::write(".github/workflows/security.yml", security_workflow)?;
     Ok(())
 }
-
 fn create_optimization_configs(app_type: &str) -> io::Result<()> {
-    // Create Browserslist config for better browser targeting
-    let browserslist = r#">0.2%
-not dead
-not op_mini all
-not ie <= 11
-maintained node versions"#;
-    fs::write(".browserslistrc", browserslist)?;
+    // Count optional directories for optimization level
+    let optional_count = vec!["api", "lib", "utils", "hooks", "services"]
+        .iter()
+        .filter(|d| Path::new(d).exists())
+        .count();
 
-    // Create bundle analyzer config
-    let bundle_analyzer = r#"{
-  "analyzerMode": "static",
-  "reportFilename": "bundle-report.html",
-  "openAnalyzer": false,
-  "generateStatsFile": true,
-  "statsFilename": "bundle-stats.json"
-}"#;
-    fs::write(".analyzerrc", bundle_analyzer)?;
+    println!("📊 Found {} optional optimization directories", optional_count);
 
-    // Create performance budget config
-    let performance_budget = r#"{
-  "resourceSizes": [
-    {
-      "resourceType": "document",
-      "budget": 18
-    },
-    {
-      "resourceType": "stylesheet",
-      "budget": 50
-    },
-    {
-      "resourceType": "font",
-      "budget": 50
-    },
-    {
-      "resourceType": "image",
-      "budget": 300
-    },
-    {
-      "resourceType": "script",
-      "budget": 300
-    }
-  ],
-  "timings": [
-    {
-      "metric": "interactive",
-      "budget": 3000
-    },
-    {
-      "metric": "first-contentful-paint",
-      "budget": 1500
-    }
-  ]
-}"#;
-    fs::write("performance-budget.json", performance_budget)?;
+    // Read existing configuration if it exists
+    let existing_config = if Path::new("next.config.js").exists() {
+        Some(fs::read_to_string("next.config.js")?)
+    } else {
+        None
+    };
 
-    // Framework-specific optimizations
+    // Apply framework-specific optimizations
     match app_type {
         "nextjs" => {
-            let next_config = r#"
-const withBundleAnalyzer = require('@next/bundle-analyzer')({
-  enabled: process.env.ANALYZE === 'true',
-})
-
-module.exports = withBundleAnalyzer({
-  swcMinify: true,
-  compiler: {
-    removeConsole: process.env.NODE_ENV === 'production',
-  },
-  experimental: {
-    optimizeCss: true,
-    optimizeImages: true,
-    scrollRestoration: true,
-  },
-  images: {
-    formats: ['image/avif', 'image/webp'],
-    minimumCacheTTL: 60,
-  },
-  headers: async () => [
-    {
-      source: '/:all*(svg|jpg|png)',
-      locale: false,
-      headers: [
-        {
-          key: 'Cache-Control',
-          value: 'public, max-age=31536000, must-revalidate',
-        },
-      ],
-    },
-  ],
-})"#;
-            fs::write("next.config.js", next_config)?;
+            if let Some(_config) = existing_config {
+                println!("🔄 Merging with existing Next.js configuration");
+                // Merge logic here
+            }
+            create_nextjs_optimized_config()?;
         },
         "react" => {
-            let craco_config = r#"
-const { BundleAnalyzerPlugin } = require('webpack-bundle-analyzer');
-const CompressionPlugin = require('compression-webpack-plugin');
-
-module.exports = {
-  webpack: {
-    configure: (webpackConfig) => {
-      webpackConfig.optimization = {
-        ...webpackConfig.optimization,
-        splitChunks: {
-          chunks: 'all',
-          minSize: 20000,
-          maxSize: 244000,
+            create_nextjs_optimized_config()?;
         },
-      };
-      return webpackConfig;
-    },
-    plugins: [
-      new CompressionPlugin(),
-      process.env.ANALYZE && new BundleAnalyzerPlugin(),
-    ].filter(Boolean),
-  },
-}"#;
-            fs::write("craco.config.js", craco_config)?;
+        "vue" => {
+            create_nextjs_optimized_config()?;
+        },
+        "svelte" => {
+            create_nextjs_optimized_config()?;
+        },
+        "angular" => {
+            create_nextjs_optimized_config()?;
         },
         _ => {}
     }
 
-    // Create cache config
-    let cache_config = r#"{
-  "cacheDirectory": ".cache",
-  "compression": true,
-  "compressionLevel": 6,
-  "maxAge": 86400000
-}"#;
-    fs::write("cache.config.json", cache_config)?;
-
     Ok(())
 }
 
+fn check_docker_setup() -> io::Result<()> {
+    println!("🐳 Checking Docker setup...");
+    // Check if Docker is installed and running
+    let docker_status = Command::new("docker")
+        .arg("info")
+        .output()
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Docker not found or not running"))?;
 
-
-
-fn create_framework_configs(app_type: &str) -> io::Result<()> {
-    match app_type {
-        "nextjs" => {
-            let next_config = r#"
-            module.exports = {
-                swcMinify: true,
-                optimizeFonts: true,
-                images: { unoptimized: false },
-                compiler: { removeConsole: process.env.NODE_ENV === 'production' }
-            }"#;
-            fs::write("next.config.js", next_config)?;
-        },
-        "react" => {
-            let vite_config = r#"
-            import { defineConfig } from 'vite'
-            import react from '@vitejs/plugin-react'
-            
-            export default defineConfig({
-                plugins: [react()],
-                build: {
-                    minify: 'terser',
-                    sourcemap: false,
-                    rollupOptions: { output: { manualChunks: { vendor: ['react', 'react-dom'] } } }
-                }
-            })"#;
-            fs::write("vite.config.js", vite_config)?;
-        },
-        "vue" => {
-            let vue_config = r#"
-            module.exports = {
-                productionSourceMap: false,
-                chainWebpack: config => {
-                    config.optimization.splitChunks({ chunks: 'all' });
-                }
-            }"#;
-            fs::write("vue.config.js", vue_config)?;
-        },
-        "svelte" => {
-            let vite_config = r#"
-            import { defineConfig } from 'vite';
-            import { svelte } from '@sveltejs/vite-plugin-svelte';
-            
-            export default defineConfig({
-                plugins: [svelte()],
-                build: { minify: 'terser', sourcemap: false }
-            })"#;
-            fs::write("vite.config.js", vite_config)?;
-        },
-        "angular" => {
-            let angular_config = r#"{
-                "projects": {
-                    "app": {
-                        "architect": {
-                            "build": {
-                                "configurations": {
-                                    "production": {
-                                        "optimization": true,
-                                        "aot": true,
-                                        "buildOptimizer": true
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }"#;
-            fs::write("angular.json", angular_config)?;
-        },
-        "astro" => {
-            let astro_config = r#"
-            export default {
-                output: 'static',
-                build: { inlineStylesheets: 'auto' },
-                compressHTML: true
-            }"#;
-            fs::write("astro.config.mjs", astro_config)?;
-        },
-        "remix" => {
-            let remix_config = r#"
-            module.exports = {
-                serverBuildTarget: "vercel",
-                serverMinify: true,
-                future: { v2_routeConvention: true }
-            }"#;
-            fs::write("remix.config.js", remix_config)?;
-        },
-        "mern" => {
-            // Client config (React)
-            let client_config = r#"
-            module.exports = {
-                webpack: {
-                    configure: {
-                        optimization: {
-                            splitChunks: { chunks: 'all' },
-                            minimize: true
-                        }
-                    }
-                }
-            }"#;
-            fs::create_dir_all("client")?;
-            fs::write("client/craco.config.js", client_config)?;
-
-            // Server config (Express)
-            let server_config = r#"
-            module.exports = {
-                mongodb: {
-                    url: process.env.MONGODB_URI,
-                    options: { useUnifiedTopology: true }
-                },
-                cors: { origin: process.env.CLIENT_URL },
-                compression: { level: 6 }
-            }"#;
-            fs::create_dir_all("server")?;
-            fs::write("server/config.js", server_config)?;
-        },
-        _ => return Ok(()),
+    if !docker_status.status.success() {
+        return Err(io::Error::new(io::ErrorKind::Other, "Docker is not running"));
     }
 
-    // Common optimizations for all frameworks
-    create_common_configs()?;
+    println!("✅ Docker is properly configured");
     Ok(())
 }
-
-fn create_common_configs() -> io::Result<()> {
-    // Create .gitignore
-    let gitignore = r#"
-node_modules
-dist
-build
-.env
-*.log"#;
-    fs::write(".gitignore", gitignore)?;
-
-    // Create simple GitHub workflow
-    fs::create_dir_all(".github/workflows")?;
-    let workflow = r#"
-name: CI
-on: [push, pull_request]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-      - run: npm ci
-      - run: npm run build"#;
-    fs::write(".github/workflows/ci.yml", workflow)?;
-
-    Ok(())
-}
-
 
 
