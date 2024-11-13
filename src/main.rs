@@ -271,6 +271,22 @@ impl DockerManager {
 
         Err(io::Error::new(io::ErrorKind::Other, "Docker Desktop failed to start"))
     }
+
+    fn check_docker_setup(&self) -> io::Result<()> {
+        match Command::new("docker").arg("--version").output() {
+            Ok(_) => {
+                println!("✅ Docker is installed");
+                Ok(())
+            }
+            Err(_) => {
+                println!("❌ Docker not found. Installing Docker...");
+                self.install_docker()?;
+                println!("⏳ Starting Docker for first time...");
+                self.start_docker()?;
+                Ok(())
+            }
+        }
+    }
 }
 
 fn main() {
@@ -350,86 +366,169 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting enterprise-grade deployment...");
 
+    // Initialize Docker manager and verify setup
+    let docker_manager = DockerManager::new();
+    docker_manager.handle_docker_setup()?;
+
     // First verify all infrastructure
     verify_docker_installation()?;
     verify_kubernetes_setup()?;
+    verify_infrastructure()?;
+    verify_kubernetes_connection()?;
     check_kubernetes_status()?;
+    // Generate necessary configuration files
+    let dockerfile = generate_dockerfile(&metadata.app_type);
+    fs::write("Dockerfile", dockerfile)?;
+    let config = generate_supervisor_config();
+    fs::write("supervisord.conf", config)?;
+    let docker_compose = generate_docker_compose(&metadata.app_name, &metadata.port);
+    fs::write("docker-compose.yml", docker_compose)?;
+
+    // Build and verify container
+    println!("🏗️ Building container...");
+    Command::new("docker")
+        .args(["build", "-t", &format!("rust-dockerize-{}", metadata.app_name), "."])
+        .status()?;
+
+    // Start container and verify status
+    let container_id = Command::new("docker")
+        .args(["run", "-d", &format!("rust-dockerize-{}", metadata.app_name)])
+        .output()?;
+    let container_id = String::from_utf8_lossy(&container_id.stdout).trim().to_string();
+    metadata.container_id = Some(container_id.clone());
+    
+    verify_container_status(&container_id)?;
 
     // Initialize async runtime
     let rt = Runtime::new()?;
     
-    // Setup enterprise infrastructure
-    rt.block_on(async {
-        let app_name = metadata.app_name.clone();
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
+    // Prepare Kubernetes environment
+    prepare_kubernetes_deployment(&metadata.app_name, if is_prod { "prod" } else { "dev" })?;
+    create_namespace_with_quotas(
+        &metadata.kubernetes_metadata.namespace, 
+        if is_prod { "prod" } else { "dev" }
+    )?;
 
-        // Setup security and caching layers
-        setup_security_layer(&app_name, &namespace).await?;
-        setup_caching_layer().await?;
-        
-        // Setup load balancing based on environment
-        setup_load_balancing(if is_prod { "prod" } else { "dev" }).await?;
-        
-        Ok::<(), io::Error>(())
-    })?;
+    // Generate and apply Kubernetes manifests
+    generate_kubernetes_manifests(
+        &metadata.app_name,
+        &metadata.app_type,
+        &metadata.port,
+        metadata.kubernetes_metadata.replicas,
+        &metadata.kubernetes_metadata.namespace,
+        if is_prod { "prod" } else { "dev" }
+    )?;
+    
+    apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
 
+    // Deploy to Kubernetes if in production
     if is_prod {
-        println!("🏭 Deploying production environment...");
-        
-        // Optimize system for production
+        let app_name = metadata.app_name.clone();
+        let app_type = metadata.app_type.clone();
+        let port = metadata.port.clone();
+        let replicas = metadata.kubernetes_metadata.replicas;
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+        deploy_to_kubernetes(
+            metadata, // Changed from &metadata to metadata since function expects &mut AppMetadata
+            &app_name,
+            &app_type,
+            &port,
+            replicas,
+            &namespace,
+            "prod"
+        )?;
+
+        // Setup enterprise infrastructure
+        rt.block_on(async {
+            setup_security_layer(&app_name, &namespace).await?;
+            setup_monitoring(&app_name, &namespace, "prod").await?;
+            setup_caching_layer().await?;
+            setup_load_balancing("prod").await?;
+            
+            Ok::<(), io::Error>(())
+        })?;
+
+        // Production optimizations
         optimize_kernel_parameters()?;
         optimize_bun_runtime()?;
         enhance_load_balancer_config()?;
         
-        // Install and configure Nginx ingress
+        if auto_scale {
+            setup_autoscaling(
+                &app_name,
+                &namespace,
+                replicas
+            )?;
+        }
+        
         install_nginx_ingress()?;
         let ingress_host = create_kubernetes_ingress(
-            &metadata.app_name,
-            &metadata.port,
-            &metadata.kubernetes_metadata.namespace,
+            &app_name,
+            &port,
+            &namespace,
             "prod"
         )?;
         metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
         
-        // Deploy load balancers
-        deploy_haproxy(&metadata.kubernetes_metadata.namespace)?;
-        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
-        
-        // Setup network policies
-        setup_network_policies(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
-        
+        deploy_haproxy(&namespace)?;
+        deploy_nginx(&namespace)?;
+        setup_network_policies(&app_name, &namespace)?;
     } else {
-        // Development mode with basic setup
+        // Development setup
         println!("🛠️ Deploying development environment...");
-        
-        // Generate development configs
         generate_nginx_config("dev")?;
         generate_haproxy_config("dev")?;
-        
-        // Start services with docker-compose
-        let compose = generate_enterprise_docker_compose(&metadata.app_name, &metadata.port);
-        fs::write("docker-compose.yml", compose)?;
         
         Command::new("docker-compose")
             .args(["up", "-d"])
             .status()?;
     }
 
-    // Save final metadata
+    // Wait for deployment and update status
+    let deployment_name = metadata.kubernetes_metadata.deployment_name.clone();
+    let namespace = metadata.kubernetes_metadata.namespace.clone();
+    
+    wait_for_kubernetes_deployment(&deployment_name, &namespace)?;
+    update_pod_status(metadata, &namespace)?;
+    print_kubernetes_status(&metadata);
     save_metadata(metadata)?;
 
     println!("✅ Enterprise deployment complete!");
     Ok(())
 }
 
-// Add cleanup on program exit
+// Add cleanup functionality
 impl Drop for AppMetadata {
     fn drop(&mut self) {
+        let docker_manager = DockerManager::new();
+        if let Err(e) = docker_manager.stop_docker() {
+            eprintln!("Error stopping Docker: {}", e);
+        }
         if let Err(e) = cleanup_deployment() {
             eprintln!("Error during cleanup: {}", e);
         }
     }
 }
+
+// Add Docker installation handling to DockerManager
+impl DockerManager {
+    fn handle_docker_setup(&self) -> io::Result<()> {
+        match Command::new("docker").arg("--version").output() {
+            Ok(_) => {
+                println!("✅ Docker is installed");
+                Ok(())
+            }
+            Err(_) => {
+                println!("❌ Docker not found. Installing Docker...");
+                self.install_docker()?;
+                println!("⏳ Starting Docker for first time...");
+                self.start_docker()?;
+                Ok(())
+            }
+        }
+    }
+}
+// Add cleanup on program exit
 
 // Helper function for enterprise docker-compose
 fn generate_enterprise_docker_compose(app_name: &str, port: &str) -> String {
@@ -497,6 +596,7 @@ volumes:
 }
 
 fn create_nextjs_files(port: &str) -> io::Result<()> {
+    let _ = port;
     let package_json = r#"{
         "name": "nextjs-app",
         "version": "0.1.0",
@@ -517,6 +617,7 @@ fn create_nextjs_files(port: &str) -> io::Result<()> {
 }
 
 fn create_app_files(app_type: &str, port: &str, entry_point: &str) -> io::Result<()> {
+    let _ = entry_point;
     if !Path::new("package.json").exists() {
         match app_type {
             "nextjs" => create_nextjs_files(port)?,
@@ -884,8 +985,8 @@ http {{
     Ok(())
 }
 
-fn generate_supervisor_config() -> io::Result<()> {
-    let supervisor_conf = r#"[supervisord]
+fn generate_supervisor_config() -> String {
+    r#"[supervisord]
 nodaemon=true
 logfile=/var/log/supervisord.log
 pidfile=/var/run/supervisord.pid
@@ -907,10 +1008,7 @@ autorestart=true
 stdout_logfile=/dev/stdout
 stdout_logfile_maxbytes=0
 stderr_logfile=/dev/stderr
-stderr_logfile_maxbytes=0"#;
-
-    fs::write("supervisord.conf", supervisor_conf)?;
-    Ok(())
+stderr_logfile_maxbytes=0"#.to_string()
 }
 
 fn generate_docker_compose(app_name: &str, port: &str) -> String {
@@ -1348,6 +1446,7 @@ fn update_pod_status(metadata: &mut AppMetadata, namespace: &str) -> io::Result<
 }
 
 fn create_kubernetes_ingress(app_name: &str, port: &str, namespace: &str, mode: &str) -> io::Result<String> {
+    let _ = mode;
     let ingress = format!(
         r#"apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -1541,6 +1640,9 @@ spec:
 }
 
 async fn setup_monitoring(app_name: &str, namespace: &str, mode: &str) -> io::Result<()> {
+    let _ = app_name;
+    let _ = namespace;
+    let _ = mode;
     let prometheus_config = r#"
     global:
       scrape_interval: 15s
@@ -1905,6 +2007,7 @@ async fn setup_caching_layer() -> io::Result<()> {
 
 // Enhanced load balancing configuration
 async fn setup_load_balancing(mode: &str) -> io::Result<()> {
+    let _ = mode;
     let haproxy_config = format!(
         r#"global
     maxconn 100000
