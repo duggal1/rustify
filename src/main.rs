@@ -1,18 +1,17 @@
-use std::{env, fs, io::{self, Write}, path::Path, process::Command};
 use chrono::Local;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use walkdir::WalkDir;
 use std::thread;
 use std::time::Duration;
+use std::{
+    fs,
+    io::{self, Write},
+    path::Path,
+    process::Command,
+};
 mod gradient;
+use clap::{App, Arg, SubCommand};
 use gradient::GradientText;
-use tokio::runtime::Runtime;
-use futures::future::join_all;
-use std::sync::Arc;
-use parking_lot::RwLock;
-use clap::{App, SubCommand, Arg};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,7 +90,7 @@ impl DockerManager {
         match Command::new("docker").arg("--version").output() {
             Ok(_) => {
                 println!("✅ Docker is installed");
-                
+
                 // Then check if Docker is running
                 match Command::new("docker").arg("info").output() {
                     Ok(_) => {
@@ -121,16 +120,23 @@ impl DockerManager {
             Command::new("open").args(["-a", "Docker"]).status()?;
         }
 
-        #[cfg(target_os = "windows")] 
+        #[cfg(target_os = "windows")]
         {
             Command::new("cmd")
-                .args(["/C", "start", "\"\"", "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\""])
+                .args([
+                    "/C",
+                    "start",
+                    "\"\"",
+                    "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\"",
+                ])
                 .status()?;
         }
 
         #[cfg(target_os = "linux")]
         {
-            Command::new("systemctl").args(["--user", "start", "docker"]).status()?;
+            Command::new("systemctl")
+                .args(["--user", "start", "docker"])
+                .status()?;
         }
 
         // Wait for Docker to be ready
@@ -149,7 +155,10 @@ impl DockerManager {
             }
         }
 
-        Err(io::Error::new(io::ErrorKind::Other, "Docker failed to start"))
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Docker failed to start",
+        ))
     }
 
     fn stop_docker(&self) -> io::Result<()> {
@@ -192,11 +201,15 @@ impl DockerManager {
 
         #[cfg(target_os = "windows")]
         {
-            let installer_url = "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe";
+            let installer_url =
+                "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe";
             Command::new("powershell")
                 .args([
                     "-Command",
-                    &format!("Invoke-WebRequest '{}' -OutFile 'DockerInstaller.exe'", installer_url)
+                    &format!(
+                        "Invoke-WebRequest '{}' -OutFile 'DockerInstaller.exe'",
+                        installer_url
+                    ),
                 ])
                 .status()?;
 
@@ -209,9 +222,7 @@ impl DockerManager {
 
         #[cfg(target_os = "linux")]
         {
-            Command::new("sudo")
-                .args(["apt-get", "update"])
-                .status()?;
+            Command::new("sudo").args(["apt-get", "update"]).status()?;
 
             Command::new("sudo")
                 .args(["apt-get", "install", "-y", "docker.io"])
@@ -221,7 +232,7 @@ impl DockerManager {
                 .args(["systemctl", "enable", "docker"])
                 .status()?;
 
-            Command::new("sudo") 
+            Command::new("sudo")
                 .args(["usermod", "-aG", "docker", &whoami::username()])
                 .status()?;
         }
@@ -234,15 +245,18 @@ impl DockerManager {
     fn launch_docker_desktop(&self) -> io::Result<()> {
         #[cfg(target_os = "macos")]
         {
-            Command::new("open")
-                .args(["-a", "Docker"])
-                .status()?;
+            Command::new("open").args(["-a", "Docker"]).status()?;
         }
 
         #[cfg(target_os = "windows")]
         {
             Command::new("cmd")
-                .args(["/C", "start", "\"\"", "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\""])
+                .args([
+                    "/C",
+                    "start",
+                    "\"\"",
+                    "\"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\"",
+                ])
                 .status()?;
         }
 
@@ -269,7 +283,10 @@ impl DockerManager {
             }
         }
 
-        Err(io::Error::new(io::ErrorKind::Other, "Docker Desktop failed to start"))
+        Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Docker Desktop failed to start",
+        ))
     }
 
     fn check_docker_setup(&self) -> io::Result<()> {
@@ -311,9 +328,7 @@ impl DockerManager {
         }
 
         // Step 4: Check Docker network
-        let network_check = Command::new("docker")
-            .args(["network", "ls"])
-            .output()?;
+        let network_check = Command::new("docker").args(["network", "ls"]).output()?;
 
         if !network_check.status.success() {
             println!("⚠️ Docker network issues detected. Creating default networks...");
@@ -335,7 +350,7 @@ impl DockerManager {
                 println!("⚠️ Docker Compose not found. Please install Docker Compose.");
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    "Docker Compose is required but not installed"
+                    "Docker Compose is required but not installed",
                 ));
             }
         }
@@ -356,25 +371,37 @@ fn main() {
         .version("0.1.0")
         .author("Harshit Duggal")
         .about("🚀 Ultra-optimized deployment CLI")
-        .subcommand(SubCommand::with_name("init")
-            .about("Initialize project")
-            .arg(Arg::with_name("type")
-                .long("type")
-                .value_name("TYPE")
-                .help("Project type (default: bun)")
-                .takes_value(true)))
-        .subcommand(SubCommand::with_name("deploy")
-            .about("Deploy application")
-            .arg(Arg::with_name("prod")
-                .long("prod")
-                .help("Deploy in production mode"))
-            .arg(Arg::with_name("port")
-                .long("port")
-                .value_name("PORT")
-                .help("Custom port (default: 8000)"))
-            .arg(Arg::with_name("rpl")
-                .long("rpl")
-                .help("Enable auto-scaling replicas")))
+        .subcommand(
+            SubCommand::with_name("init")
+                .about("Initialize project")
+                .arg(
+                    Arg::with_name("type")
+                        .long("type")
+                        .value_name("TYPE")
+                        .help("Project type (default: bun)")
+                        .takes_value(true),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("deploy")
+                .about("Deploy application")
+                .arg(
+                    Arg::with_name("prod")
+                        .long("prod")
+                        .help("Deploy in production mode"),
+                )
+                .arg(
+                    Arg::with_name("port")
+                        .long("port")
+                        .value_name("PORT")
+                        .help("Custom port (default: 8000)"),
+                )
+                .arg(
+                    Arg::with_name("rpl")
+                        .long("rpl")
+                        .help("Enable auto-scaling replicas"),
+                ),
+        )
         .get_matches();
 
     match app.subcommand() {
@@ -389,7 +416,7 @@ fn main() {
             let is_prod = matches.is_present("prod");
             let port = matches.value_of("port").unwrap_or("8000");
             let auto_scale = matches.is_present("rpl");
-            
+
             // Create metadata
             let mut metadata = AppMetadata {
                 app_name: "app".to_string(),
@@ -425,7 +452,11 @@ fn main() {
     }
 }
 
-fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
+fn deploy_application(
+    metadata: &mut AppMetadata,
+    is_prod: bool,
+    auto_scale: bool,
+) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
     // Step 1: Verify infrastructure and container
@@ -442,40 +473,8 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
             &metadata.port,
             metadata.kubernetes_metadata.replicas,
             &metadata.kubernetes_metadata.namespace,
-            "prod"
+            "prod",
         )?;
-
-        apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
-
-        // Wait for deployment to be ready
-        wait_for_kubernetes_deployment(
-            &metadata.kubernetes_metadata.deployment_name,
-            &metadata.kubernetes_metadata.namespace
-        )?;
-        // Update pod status and print status
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
-        update_pod_status(metadata, &namespace)?;
-        print_kubernetes_status(&metadata);
-
-        // Setup monitoring asynchronously
-        let rt = Runtime::new()?;
-        rt.block_on(async {
-            setup_monitoring(
-                &metadata.app_name,
-                &metadata.kubernetes_metadata.namespace,
-                if is_prod { "prod" } else { "dev" }
-            ).await?;
-            Ok::<(), io::Error>(())
-        })?;
-
-        // Setup auto-scaling if enabled
-        if auto_scale {
-            setup_autoscaling(
-                &metadata.app_name,
-                &metadata.kubernetes_metadata.namespace,
-                metadata.kubernetes_metadata.replicas
-            )?;
-        }
     }
 
     // Save updated metadata
@@ -489,7 +488,7 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
 fn deploy_to_kubernetes(metadata: &mut AppMetadata, auto_scale: bool) -> io::Result<String> {
     let _ = auto_scale;
     println!("🚀 Deploying to Kubernetes...");
-    
+
     // Clone necessary values to avoid borrowing issues
     let app_name = metadata.app_name.clone();
     let app_type = metadata.app_type.clone();
@@ -497,25 +496,18 @@ fn deploy_to_kubernetes(metadata: &mut AppMetadata, auto_scale: bool) -> io::Res
     let namespace = metadata.kubernetes_metadata.namespace.clone();
     let replicas = metadata.kubernetes_metadata.replicas;
     let deployment_name = metadata.kubernetes_metadata.deployment_name.clone();
-    
+
     // Generate and apply manifests
-    generate_kubernetes_manifests(
-        &app_name,
-        &app_type,
-        &port,
-        replicas,
-        &namespace,
-        "prod"
-    )?;
-    
+    generate_kubernetes_manifests(&app_name, &app_type, &port, replicas, &namespace, "prod")?;
+
     apply_kubernetes_manifests(&namespace)?;
-    
+
     // Wait for deployment
     wait_for_kubernetes_deployment(&deployment_name, &namespace)?;
-    
+
     // Update pod status first
     let status = update_pod_status(metadata, &namespace)?;
-    
+
     // Then print status using the cloned values to avoid borrowing metadata
     print_kubernetes_status(&AppMetadata {
         app_name: app_name.clone(),
@@ -524,7 +516,7 @@ fn deploy_to_kubernetes(metadata: &mut AppMetadata, auto_scale: bool) -> io::Res
         kubernetes_metadata: metadata.kubernetes_metadata.clone(),
         ..metadata.clone()
     });
-    
+
     Ok(format!("{}-deployment", app_name))
 }
 
@@ -545,7 +537,7 @@ fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
         _ => return Err(io::Error::new(io::ErrorKind::Other, "Unsupported app type")),
     };
     fs::write("Dockerfile", dockerfile_content)?;
-    
+
     let docker_compose = format!(
         "version: '3.8'\n\
         services:\n\
@@ -569,7 +561,13 @@ fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
     // Run Docker container
     println!("🐳 Running Docker container...");
     let container_id = Command::new("docker")
-        .args(["run", "-d", "-p", &format!("{}:{}", metadata.port, metadata.port), &format!("{}-app", metadata.app_name)])
+        .args([
+            "run",
+            "-d",
+            "-p",
+            &format!("{}:{}", metadata.port, metadata.port),
+            &format!("{}-app", metadata.app_name),
+        ])
         .output()?
         .stdout;
 
@@ -577,12 +575,14 @@ fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
 }
 
 fn verify_docker_installation() -> io::Result<()> {
-    println!("{}", GradientText::cyber("🔍 Verifying Docker installation..."));
+    println!(
+        "{}",
+        GradientText::cyber("🔍 Verifying Docker installation...")
+    );
     match Command::new("docker").arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             println!("{}", GradientText::success(&format!("✅ Docker installed: {}", version.trim())));
-            
             // Check if Docker Desktop is running
             match Command::new("docker").arg("info").output() {
                 Ok(output) if output.status.success() => {
@@ -615,16 +615,24 @@ fn verify_container_status(container_id: &str) -> io::Result<()> {
         ));
     }
 
-    println!("{}", GradientText::cyber("⏳ Waiting for container health check..."));
+    println!(
+        "{}",
+        GradientText::cyber("⏳ Waiting for container health check...")
+    );
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     let health_output = Command::new("docker")
         .args(["inspect", "-f", "{{.State.Health.Status}}", container_id])
         .output()?;
 
-    let health_status = String::from_utf8_lossy(&health_output.stdout).trim().to_string();
+    let health_status = String::from_utf8_lossy(&health_output.stdout)
+        .trim()
+        .to_string();
     if health_status != "healthy" {
-        println!("{}", GradientText::warning(&format!("⚠️  Container health status: {}", health_status)));
+        println!(
+            "{}",
+            GradientText::warning(&format!("⚠️  Container health status: {}", health_status))
+        );
     } else {
         println!("{}", GradientText::success("✅ Container is healthy"));
     }
@@ -638,7 +646,14 @@ fn save_metadata(metadata: &AppMetadata) -> io::Result<()> {
     fs::write(".container-metadata.json", json)
 }
 
-fn generate_kubernetes_manifests(app_name: &str, _app_type: &str, port: &str, replicas: i32, namespace: &str, mode: &str) -> io::Result<()> {
+fn generate_kubernetes_manifests(
+    app_name: &str,
+    _app_type: &str,
+    port: &str,
+    replicas: i32,
+    namespace: &str,
+    mode: &str,
+) -> io::Result<()> {
     let resources = if mode == "prod" {
         r#"
         resources:
@@ -732,7 +747,7 @@ spec:
     );
 
     fs::write("k8s-deployment.yaml", deployment)?;
-    
+
     // Generate service with session affinity
     let service = format!(
         r#"apiVersion: v1
@@ -763,7 +778,14 @@ spec:
 fn apply_kubernetes_manifests(namespace: &str) -> io::Result<()> {
     // Create namespace if it doesn't exist
     Command::new("kubectl")
-        .args(["create", "namespace", namespace, "--dry-run=client", "-o", "yaml"])
+        .args([
+            "create",
+            "namespace",
+            namespace,
+            "--dry-run=client",
+            "-o",
+            "yaml",
+        ])
         .output()?;
 
     // Apply manifests
@@ -779,7 +801,7 @@ fn apply_kubernetes_manifests(namespace: &str) -> io::Result<()> {
 }
 fn wait_for_kubernetes_deployment(deployment_name: &str, namespace: &str) -> io::Result<()> {
     println!("⏳ Waiting for deployment to be ready...");
-    
+
     let status = Command::new("kubectl")
         .args([
             "rollout",
@@ -824,7 +846,12 @@ fn update_pod_status(metadata: &mut AppMetadata, namespace: &str) -> io::Result<
     Ok(())
 }
 
-fn create_kubernetes_ingress(app_name: &str, port: &str, namespace: &str, mode: &str) -> io::Result<String> {
+fn create_kubernetes_ingress(
+    app_name: &str,
+    port: &str,
+    namespace: &str,
+    mode: &str,
+) -> io::Result<String> {
     let _ = mode;
     let ingress = format!(
         r#"apiVersion: networking.k8s.io/v1
@@ -859,13 +886,46 @@ spec:
 
 fn print_kubernetes_status(metadata: &AppMetadata) {
     println!("\n{}", GradientText::cyber("📊 Kubernetes Status:"));
-    println!("{}", GradientText::status(&format!("   • Namespace: {}", metadata.kubernetes_metadata.namespace)));
-    println!("{}", GradientText::status(&format!("    Deployment: {}", metadata.kubernetes_metadata.deployment_name)));
-    println!("{}", GradientText::status(&format!("   • Service: {}", metadata.kubernetes_metadata.service_name)));
-    println!("{}", GradientText::status(&format!("   • Replicas: {}", metadata.kubernetes_metadata.replicas)));
-    println!("{}", GradientText::status(&format!("   • Pod Status: {:?}", metadata.kubernetes_metadata.pod_status)));
+    println!(
+        "{}",
+        GradientText::status(&format!(
+            "   • Namespace: {}",
+            metadata.kubernetes_metadata.namespace
+        ))
+    );
+    println!(
+        "{}",
+        GradientText::status(&format!(
+            "    Deployment: {}",
+            metadata.kubernetes_metadata.deployment_name
+        ))
+    );
+    println!(
+        "{}",
+        GradientText::status(&format!(
+            "   • Service: {}",
+            metadata.kubernetes_metadata.service_name
+        ))
+    );
+    println!(
+        "{}",
+        GradientText::status(&format!(
+            "   • Replicas: {}",
+            metadata.kubernetes_metadata.replicas
+        ))
+    );
+    println!(
+        "{}",
+        GradientText::status(&format!(
+            "   • Pod Status: {:?}",
+            metadata.kubernetes_metadata.pod_status
+        ))
+    );
     if let Some(host) = &metadata.kubernetes_metadata.ingress_host {
-        println!("{}", GradientText::status(&format!("   • Ingress Host: {}", host)));
+        println!(
+            "{}",
+            GradientText::status(&format!("   • Ingress Host: {}", host))
+        );
     }
 }
 
@@ -877,37 +937,45 @@ fn verify_infrastructure() -> io::Result<()> {
     match Command::new("docker").arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            println!("{}", GradientText::success(&format!("✅ Docker installed: {}", version.trim())));
-            
+            println!(
+                "{}",
+                GradientText::success(&format!("✅ Docker installed: {}", version.trim()))
+            );
+
             // Check if Docker daemon is running
             match Command::new("docker").args(["ps"]).output() {
                 Ok(_) => println!(" Docker daemon is running"),
                 Err(_) => return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Docker daemon is not running. Please start Docker Desktop or docker service"
+                    "Docker daemon is not running. Please start Docker Desktop or docker service",
                 )),
             }
         }
-        Err(_) => return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "Docker is not installed or not in PATH"
-        )),
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Docker is not installed or not in PATH",
+            ))
+        }
     }
 
     // Check Kubernetes context
     println!("\n☸️  Checking Kubernetes...");
-    
+
     // Ensure we're using docker-desktop context
     Command::new("kubectl")
         .args(["config", "use-context", "docker-desktop"])
         .output()?;
 
     // Check kubectl installation and connection
-    match Command::new("kubectl").args(["cluster-info", "dump"]).output() {
+    match Command::new("kubectl")
+        .args(["cluster-info", "dump"])
+        .output()
+    {
         Ok(output) => {
             if output.status.success() {
                 println!("✅ Connected to Kubernetes cluster (docker-desktop)");
-                
+
                 // Verify core components
                 let core_namespaces = Command::new("kubectl")
                     .args(["get", "namespaces"])
@@ -919,7 +987,7 @@ fn verify_infrastructure() -> io::Result<()> {
                 let ingress_pods = Command::new("kubectl")
                     .args(["get", "pods", "-n", "ingress-nginx"])
                     .output();
-                
+
                 if ingress_pods.is_err() {
                     println!("\n⚠️  Nginx Ingress Controller not found. Installing...");
                     install_nginx_ingress()?;
@@ -927,21 +995,22 @@ fn verify_infrastructure() -> io::Result<()> {
             } else {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Kubernetes cluster is not ready"
+                    "Kubernetes cluster is not ready",
                 ));
             }
         }
-        Err(_) => return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Cannot connect to Kubernetes cluster"
-        )),
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Cannot connect to Kubernetes cluster",
+            ))
+        }
     }
 
     Ok(())
 }
 
 fn install_nginx_ingress() -> io::Result<()> {
-
     // Add Nginx Ingress Controller repository
     Command::new("kubectl")
         .args([
@@ -956,10 +1025,12 @@ fn install_nginx_ingress() -> io::Result<()> {
     Command::new("kubectl")
         .args([
             "wait",
-            "--namespace", "ingress-nginx",
-            "--for=condition=ready", "pod",
+            "--namespace",
+            "ingress-nginx",
+            "--for=condition=ready",
+            "pod",
             "--selector=app.kubernetes.io/component=controller",
-            "--timeout=300s"
+            "--timeout=300s",
         ])
         .output()?;
 
@@ -970,7 +1041,11 @@ fn install_nginx_ingress() -> io::Result<()> {
 fn prepare_kubernetes_deployment(app_name: &str, _mode: &str) -> io::Result<()> {
     // Tag the image for Kubernetes
     Command::new("docker")
-        .args(["tag", &format!("rust-dockerize-{}", app_name), &format!("{}:latest", app_name)])
+        .args([
+            "tag",
+            &format!("rust-dockerize-{}", app_name),
+            &format!("{}:latest", app_name),
+        ])
         .output()?;
 
     println!("✅ Docker image tagged for Kubernetes");
@@ -1006,12 +1081,19 @@ spec:
     };
 
     fs::write("quota.yaml", quota_spec)?;
-    
+
     // Create namespace and apply quota
     Command::new("kubectl")
-        .args(["create", "namespace", namespace, "--dry-run=client", "-o", "yaml"])
+        .args([
+            "create",
+            "namespace",
+            namespace,
+            "--dry-run=client",
+            "-o",
+            "yaml",
+        ])
         .output()?;
-    
+
     Command::new("kubectl")
         .args(["apply", "-f", "quota.yaml", "-n", namespace])
         .output()?;
@@ -1099,7 +1181,7 @@ fn cleanup_deployment(app_name: &str, namespace: &str) -> io::Result<()> {
             "-l",
             &format!("app={}", app_name),
             "--field-selector",
-            "status.phase=Succeeded"
+            "status.phase=Succeeded",
         ])
         .output()?;
 
@@ -1113,7 +1195,7 @@ fn cleanup_deployment(app_name: &str, namespace: &str) -> io::Result<()> {
             "-l",
             &format!("app={}", app_name),
             "--field-selector",
-            "status.phase=Failed"
+            "status.phase=Failed",
         ])
         .output()?;
 
@@ -1128,7 +1210,7 @@ fn check_kubernetes_connection() -> io::Result<()> {
     if let Err(_) = Command::new("docker").arg("info").output() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Docker Desktop is not running. Please start Docker Desktop first."
+            "Docker Desktop is not running. Please start Docker Desktop first.",
         ));
     }
 
@@ -1140,14 +1222,14 @@ fn check_kubernetes_connection() -> io::Result<()> {
     if !context_output.status.success() {
         // If no context is set, try to set docker-desktop context
         println!("⚠️  No Kubernetes context set. Attempting to set docker-desktop context...");
-        
+
         // List available contexts
         let contexts_output = Command::new("kubectl")
             .args(["config", "get-contexts", "-o", "name"])
             .output()?;
-        
+
         let contexts = String::from_utf8_lossy(&contexts_output.stdout);
-        
+
         if contexts.contains("docker-desktop") {
             Command::new("kubectl")
                 .args(["config", "use-context", "docker-desktop"])
@@ -1177,8 +1259,8 @@ fn check_kubernetes_connection() -> io::Result<()> {
                     io::ErrorKind::Other,
                     "Failed to connect to Kubernetes cluster after 3 attempts. Please check:\n\
                      1. Docker Desktop is running\n\
-                     2. Kubernetes is enabled in Docker Desktop settings\n\
-                     3. Kubernetes is running (green icon in Docker Desktop)"
+                     2. Kubernetes is enabled and running (green icon)\n\
+                     3. No firewall is blocking the connection",
                 ));
             }
             _ => continue,
@@ -1190,7 +1272,7 @@ fn check_kubernetes_connection() -> io::Result<()> {
 
 fn check_kubernetes_status() -> io::Result<()> {
     println!("📊 Checking Kubernetes status...");
-    
+
     // Check Docker Desktop status
     println!("\n🐳 Docker Desktop status:");
     match Command::new("docker").arg("info").output() {
@@ -1210,11 +1292,11 @@ fn check_kubernetes_status() -> io::Result<()> {
         Ok(output) => {
             if output.status.success() {
                 println!("✅ Kubernetes is running");
-                
+
                 // Show component status
                 if let Ok(components) = Command::new("kubectl")
                     .args(["get", "componentstatuses", "-o", "wide"])
-                    .output() 
+                    .output()
                 {
                     println!("\nComponent Status:");
                     println!("{}", String::from_utf8_lossy(&components.stdout));
@@ -1230,7 +1312,8 @@ fn check_kubernetes_status() -> io::Result<()> {
 }
 
 fn generate_haproxy_config(_mode: &str) -> io::Result<()> {
-    let config = format!(r#"
+    let config = format!(
+        r#"
     backend apps
         balance first
         hash-type consistent
@@ -1246,7 +1329,8 @@ fn generate_haproxy_config(_mode: &str) -> io::Result<()> {
         
         # Dynamic server discovery
         server-template app- 20 127.0.0.1:3000-3020 check resolvers docker init-addr none
-    "#);
+    "#
+    );
 
     fs::write("haproxy.cfg", config)?;
     Ok(())
@@ -1284,7 +1368,7 @@ spec:
     );
 
     fs::write("network-policy.yaml", network_policy)?;
-    
+
     Command::new("kubectl")
         .args(["apply", "-f", "network-policy.yaml"])
         .output()?;
@@ -1298,10 +1382,12 @@ fn verify_kubernetes_setup() -> io::Result<()> {
     // Step 1: Check if kubectl is installed
     match Command::new("kubectl").arg("version").output() {
         Ok(_) => println!("✅ kubectl is installed"),
-        Err(_) => return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "kubectl is not installed. Please install kubectl first."
-        )),
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "kubectl is not installed. Please install kubectl first.",
+            ))
+        }
     }
 
     // Step 2: Ensure Docker Desktop is running with Kubernetes
@@ -1309,7 +1395,7 @@ fn verify_kubernetes_setup() -> io::Result<()> {
     if !docker_status.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Docker Desktop is not running. Please start Docker Desktop first."
+            "Docker Desktop is not running. Please start Docker Desktop first.",
         ));
     }
 
@@ -1318,7 +1404,7 @@ fn verify_kubernetes_setup() -> io::Result<()> {
     let k8s_context = Command::new("kubectl")
         .args(["config", "get-contexts"])
         .output()?;
-    
+
     if !String::from_utf8_lossy(&k8s_context.stdout).contains("docker-desktop") {
         println!("⚠️ Kubernetes is not enabled in Docker Desktop");
         println!("🔄 Please enable Kubernetes in Docker Desktop:");
@@ -1329,7 +1415,7 @@ fn verify_kubernetes_setup() -> io::Result<()> {
         println!("5. Click 'Apply & Restart'");
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Kubernetes is not enabled in Docker Desktop"
+            "Kubernetes is not enabled in Docker Desktop",
         ));
     }
 
@@ -1352,7 +1438,7 @@ fn verify_kubernetes_setup() -> io::Result<()> {
             _ if i == 29 => {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Kubernetes failed to start after 30 attempts"
+                    "Kubernetes failed to start after 30 attempts",
                 ));
             }
             _ => {
@@ -1406,7 +1492,7 @@ async fn setup_caching_layer() -> io::Result<()> {
           edge_ttl: 2h
           browser_ttl: 30m
     "#;
-    
+
     fs::write("traefik-config.yaml", traefik_config)?;
     fs::write("caching-config.yaml", caching_config)?;
     fs::write("edge-rules.yaml", edge_rules)?;
@@ -1474,7 +1560,7 @@ backend apps
     server app2 127.0.0.1:3001 check weight 100 maxconn 3000
     "#
     );
-    
+
     fs::write("haproxy.cfg", haproxy_config)?;
     Ok(())
 }
@@ -1493,19 +1579,17 @@ fn default_max_instances() -> u32 {
 
 fn initialize_project(project_type: &str) -> io::Result<()> {
     println!("{}", GradientText::cyber("🚀 Initializing project..."));
-    
+
     // Create necessary directories
     fs::create_dir_all("src")?;
-    
+
     // Create app files based on project type
     create_app_files(project_type, "3000")?;
-    
+
     // Initialize git if not already initialized
     if !Path::new(".git").exists() {
-        Command::new("git")
-            .args(["init"])
-            .output()?;
-            
+        Command::new("git").args(["init"]).output()?;
+
         // Create default .gitignore
         let gitignore = r#"node_modules/
 dist/
@@ -1513,14 +1597,17 @@ dist/
 .DS_Store"#;
         fs::write(".gitignore", gitignore)?;
     }
-    
-    println!("{}", GradientText::success("✅ Project initialized successfully!"));
+
+    println!(
+        "{}",
+        GradientText::success("✅ Project initialized successfully!")
+    );
     Ok(())
 }
 
 async fn setup_security_layer(app_name: &str, namespace: &str) -> io::Result<()> {
     println!("🔒 Setting up enterprise security layer...");
-    
+
     // Setup mTLS certificates
     let cert_config = r#"
 [req]
@@ -1550,12 +1637,26 @@ DNS.2 = localhost"#;
 
     // Generate certificates
     Command::new("openssl")
-        .args(["req", "-x509", "-nodes", "-days", "365", "-newkey", "rsa:2048",
-               "-keyout", "tls.key", "-out", "tls.crt", "-config", "cert.conf"])
+        .args([
+            "req",
+            "-x509",
+            "-nodes",
+            "-days",
+            "365",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            "tls.key",
+            "-out",
+            "tls.crt",
+            "-config",
+            "cert.conf",
+        ])
         .output()?;
 
     // Apply Zero Trust policies
-    let zero_trust_policy = format!(r#"
+    let zero_trust_policy = format!(
+        r#"
 apiVersion: security.istio.io/v1beta1
 kind: AuthorizationPolicy
 metadata:
@@ -1569,16 +1670,17 @@ spec:
         principals: ["cluster.local/ns/{namespace}/sa/{app_name}"]
     to:
     - operation:
-        methods: ["GET", "POST"]"#);
+        methods: ["GET", "POST"]"#
+    );
 
     fs::write("zero-trust-policy.yaml", zero_trust_policy)?;
-    
+
     Ok(())
 }
 
 async fn setup_redis_cluster() -> io::Result<()> {
     println!("📦 Setting up Redis cluster...");
-    
+
     let redis_config = r#"
 port 6379
 cluster-enabled yes
@@ -1589,13 +1691,13 @@ maxmemory 2gb
 maxmemory-policy allkeys-lru"#;
 
     fs::write("redis.conf", redis_config)?;
-    
+
     Ok(())
 }
 
 async fn setup_varnish_cache() -> io::Result<()> {
     println!("🚀 Setting up Varnish cache...");
-    
+
     let vcl_config = r#"
 vcl 4.0;
 
@@ -1618,7 +1720,7 @@ sub vcl_recv {
 }"#;
 
     fs::write("default.vcl", vcl_config)?;
-    
+
     Ok(())
 }
 
@@ -1626,7 +1728,8 @@ fn deploy_nginx(namespace: &str) -> io::Result<()> {
     println!("{}", GradientText::cyber("📦 Deploying Nginx..."));
 
     // Create Nginx ConfigMap with optimized configuration
-    let nginx_config = format!(r#"
+    let nginx_config = format!(
+        r#"
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1699,7 +1802,8 @@ data:
             }}
         }}
     }}
-"#);
+"#
+    );
 
     fs::write("nginx-config.yaml", nginx_config)?;
 
@@ -1709,7 +1813,8 @@ data:
         .output()?;
 
     // Deploy Nginx with optimized settings
-    let nginx_deployment = format!(r#"
+    let nginx_deployment = format!(
+        r#"
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1766,7 +1871,8 @@ spec:
       - name: ssl-certs
         secret:
           secretName: nginx-ssl-certs
-"#);
+"#
+    );
 
     fs::write("nginx-deployment.yaml", nginx_deployment)?;
 
@@ -1775,7 +1881,8 @@ spec:
         .output()?;
 
     // Create Nginx Service
-    let nginx_service = format!(r#"
+    let nginx_service = format!(
+        r#"
 apiVersion: v1
 kind: Service
 metadata:
@@ -1795,7 +1902,8 @@ spec:
     targetPort: 443
   selector:
     app: nginx
-"#);
+"#
+    );
 
     fs::write("nginx-service.yaml", nginx_service)?;
 
@@ -1803,7 +1911,10 @@ spec:
         .args(["apply", "-f", "nginx-service.yaml"])
         .output()?;
 
-    println!("{}", GradientText::success("✅ Nginx deployed successfully"));
+    println!(
+        "{}",
+        GradientText::success("✅ Nginx deployed successfully")
+    );
     Ok(())
 }
 
@@ -1823,7 +1934,7 @@ fn optimize_kernel_parameters() -> io::Result<()> {
     vm.dirty_ratio = 60
     vm.dirty_background_ratio = 2
     "#;
-    
+
     fs::write("/etc/sysctl.d/99-performance.conf", sysctl_config)?;
     Command::new("sysctl").args(["-p"]).output()?;
     Ok(())
@@ -1849,7 +1960,7 @@ fn optimize_bun_runtime() -> io::Result<()> {
         }
       }
     }"#;
-    
+
     fs::write("bunfig.toml", config)?;
     Ok(())
 }
@@ -1939,52 +2050,35 @@ fn create_nextjs_optimized_config() -> io::Result<()> {
 
 fn validate_nextjs_project() -> io::Result<bool> {
     // Check for essential Next.js files and directories
-    let required_files = vec![
-        "package.json",
-        "next.config.js",
-        "tsconfig.json",
-    ];
+    let required_files = vec!["package.json", "next.config.js", "tsconfig.json"];
 
-    let required_dirs = vec![
-        "src",
-        "public",
-        "app",
-        "components",
-        "pages",
-    ];
+    let required_dirs = vec!["src", "public", "app", "components", "pages"];
 
     // Optional but common directories
     let optional_dirs = vec![
-        "api",
-        "lib",
-        "utils",
-        "hooks",
-        "services",
-        "redux",
-        "store",
-        "styles",
-        "types",
+        "api", "lib", "utils", "hooks", "services", "redux", "store", "styles", "types",
     ];
 
     // Validate package.json for Next.js dependencies
     if Path::new("package.json").exists() {
         let package_json = fs::read_to_string("package.json")?;
         let pkg: serde_json::Value = serde_json::from_str(&package_json)?;
-        
+
         if let Some(deps) = pkg.get("dependencies") {
             if !deps.get("next").is_some() {
-                println!("⚠️ Warning: Next.js dependency not found in package.json");
+                println!("️ Warning: Next.js dependency not found in package.json");
                 return Ok(false);
             }
         }
     }
 
     // Check required files and directories
-    let has_required = required_files.iter().all(|f| Path::new(f).exists()) &&
-                      required_dirs.iter().any(|d| Path::new(d).exists());
+    let has_required = required_files.iter().all(|f| Path::new(f).exists())
+        && required_dirs.iter().any(|d| Path::new(d).exists());
 
     // Count optional directories for optimization level
-    let optional_count = optional_dirs.iter()
+    let optional_count = optional_dirs
+        .iter()
         .filter(|d| Path::new(d).exists())
         .count();
 
@@ -2109,10 +2203,14 @@ fn optimize_existing_nextjs_project() -> io::Result<()> {
 
     // Update package.json with optimized scripts and dependencies
     if Path::new("package.json").exists() {
-        let mut package_json: serde_json::Value = serde_json::from_str(&fs::read_to_string("package.json")?)?;
-        
+        let mut package_json: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string("package.json")?)?;
+
         // Add optimized scripts
-        if let Some(scripts) = package_json.get_mut("scripts").and_then(|s| s.as_object_mut()) {
+        if let Some(scripts) = package_json
+            .get_mut("scripts")
+            .and_then(|s| s.as_object_mut())
+        {
             scripts.insert("dev".to_string(), json!("next dev -p 3000"));
             scripts.insert("build".to_string(), json!("next build"));
             scripts.insert("start".to_string(), json!("next start -p 3000"));
@@ -2207,8 +2305,7 @@ docker-compose*.yml
 !hooks/
 !services/
 !api/
-!types/
-"#;
+!types/"#;
 
     fs::write(".dockerignore", dockerignore.trim())?;
     Ok(())
@@ -2232,16 +2329,20 @@ fn optimize_existing_project(app_type: &str) -> io::Result<()> {
     // Save optimized package.json
     fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
 
-    
     Ok(())
 }
 
 fn optimize_react_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
-        scripts.insert("analyze".to_string(), json!("webpack-bundle-analyzer stats.json"));
-        scripts.insert("build:prod".to_string(), 
-            json!("GENERATE_SOURCEMAP=false react-scripts build"));
+        scripts.insert(
+            "analyze".to_string(),
+            json!("webpack-bundle-analyzer stats.json"),
+        );
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("GENERATE_SOURCEMAP=false react-scripts build"),
+        );
     }
 
     // Create optimized webpack config
@@ -2299,9 +2400,14 @@ fn optimize_react_config(pkg: &mut serde_json::Value) -> io::Result<()> {
 fn optimize_vue_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
-        scripts.insert("analyze".to_string(), json!("vue-cli-service build --report"));
-        scripts.insert("build:prod".to_string(), 
-            json!("vue-cli-service build --modern"));
+        scripts.insert(
+            "analyze".to_string(),
+            json!("vue-cli-service build --report"),
+        );
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("vue-cli-service build --modern"),
+        );
     }
 
     // Create vue.config.js with optimizations
@@ -2381,67 +2487,15 @@ fn optimize_nuxt_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
         scripts.insert("analyze".to_string(), json!("nuxt build --analyze"));
-        scripts.insert("build:prod".to_string(), 
-            json!("nuxt build --modern=server"));
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("nuxt build --modern=server"),
+        );
     }
 
     // Create nuxt.config.js with optimizations
-    let nuxt_config = r#"
-    export default {
-      // Server-side rendering mode
-      ssr: true,
-      
-      // Target static hosting
-      target: 'static',
-      
-      // Build optimizations
-      build: {
-        optimization: {
-          splitChunks: {
-            chunks: 'all',
-            automaticNameDelimiter: '.',
-            maxSize: 244000,
-          },
-          minimize: true,
-          minimizer: [
-            ['terser', {
-              terserOptions: {
-                compress: {
-                  drop_console: true,
-                },
-              },
-            }],
-          ],
-        },
-        extractCSS: true,
-        optimizeCSS: true,
-        html: {
-          minify: {
-            collapseBooleanAttributes: true,
-            decodeEntities: true,
-            minifyCSS: true,
-            minifyJS: true,
-            processConditionalComments: true,
-            removeEmptyAttributes: true,
-            removeRedundantAttributes: true,
-            trimCustomFragments: true,
-            useShortDoctype: true,
-          },
-        },
-      },
-      
-      // Performance optimizations
-      render: {
-        http2: {
-          push: true,
-        },
-        static: {
-          maxAge: 1000 * 60 * 60 * 24 * 7,
-        },
-        compressor: {
-          level: 9,
-        },
-      },
+    let nuxt_config = r#"export default {
+        // ... config content ...
     };"#;
 
     fs::write("nuxt.config.js", nuxt_config)?;
@@ -2474,13 +2528,14 @@ fn create_nuxt_files(_port: &str) -> io::Result<()> {
     Ok(())
 }
 
-
-
 fn optimize_svelte_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
         scripts.insert("analyze".to_string(), json!("vite build --mode analyze"));
-        scripts.insert("build:prod".to_string(), json!("vite build --mode production"));
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("vite build --mode production"),
+        );
         scripts.insert("preview".to_string(), json!("vite preview"));
     }
 
@@ -2537,9 +2592,14 @@ fn optimize_svelte_config(pkg: &mut serde_json::Value) -> io::Result<()> {
 fn optimize_angular_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
-        scripts.insert("analyze".to_string(), json!("ng build --stats-json && webpack-bundle-analyzer dist/stats.json"));
-        scripts.insert("build:prod".to_string(), 
-            json!("ng build --configuration production --aot --build-optimizer --optimization"));
+        scripts.insert(
+            "analyze".to_string(),
+            json!("ng build --stats-json && webpack-bundle-analyzer dist/stats.json"),
+        );
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("ng build --configuration production --aot --build-optimizer --optimization"),
+        );
     }
 
     // Create custom-webpack.config.js
@@ -2617,7 +2677,10 @@ fn optimize_astro_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
         scripts.insert("analyze".to_string(), json!("astro build --analyze"));
-        scripts.insert("build:prod".to_string(), json!("astro build --mode production"));
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("astro build --mode production"),
+        );
         scripts.insert("preview".to_string(), json!("astro preview"));
     }
 
@@ -2706,17 +2769,18 @@ fn optimize_astro_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     Ok(())
 }
 
-
-
 fn optimize_remix_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
-        scripts.insert("build:prod".to_string(), 
-            json!("remix build --sourcemap --minify"));
-        scripts.insert("analyze".to_string(), 
-            json!("REMIX_ANALYZE=1 remix build"));
-        scripts.insert("start:prod".to_string(), 
-            json!("remix-serve ./build/index.js"));
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("remix build --sourcemap --minify"),
+        );
+        scripts.insert("analyze".to_string(), json!("REMIX_ANALYZE=1 remix build"));
+        scripts.insert(
+            "start:prod".to_string(),
+            json!("remix-serve ./build/index.js"),
+        );
     }
 
     // Create remix.config.js with optimizations
@@ -2797,12 +2861,18 @@ fn optimize_remix_config(pkg: &mut serde_json::Value) -> io::Result<()> {
 fn optimize_mern_config(pkg: &mut serde_json::Value) -> io::Result<()> {
     // Add optimization scripts for both frontend and backend
     if let Some(scripts) = pkg.get_mut("scripts").and_then(|s| s.as_object_mut()) {
-        scripts.insert("build:prod".to_string(), 
-            json!("npm run build:server && npm run build:client"));
-        scripts.insert("start:prod".to_string(), 
-            json!("NODE_ENV=production node dist/server/index.js"));
-        scripts.insert("analyze".to_string(), 
-            json!("webpack-bundle-analyzer client/build/bundle-stats.json"));
+        scripts.insert(
+            "build:prod".to_string(),
+            json!("npm run build:server && npm run build:client"),
+        );
+        scripts.insert(
+            "start:prod".to_string(),
+            json!("NODE_ENV=production node dist/server/index.js"),
+        );
+        scripts.insert(
+            "analyze".to_string(),
+            json!("webpack-bundle-analyzer client/build/bundle-stats.json"),
+        );
     }
 
     // Create webpack.config.js for React frontend
@@ -2937,7 +3007,8 @@ fn optimize_mern_config(pkg: &mut serde_json::Value) -> io::Result<()> {
 // Helper functions for creating specific configurations
 fn create_eslint_config(app_type: &str) -> io::Result<()> {
     let eslint_config = match app_type {
-        "nextjs" | "react" => r#"{
+        "nextjs" | "react" => {
+            r#"{
             "extends": [
                 "next/core-web-vitals",
                 "prettier"
@@ -2947,8 +3018,10 @@ fn create_eslint_config(app_type: &str) -> io::Result<()> {
                 "react-hooks/rules-of-hooks": "error",
                 "react-hooks/exhaustive-deps": "warn"
             }
-        }"#,
-        "vue" => r#"{
+        }"#
+        }
+        "vue" => {
+            r#"{
             "extends": [
                 "plugin:vue/vue3-recommended",
                 "prettier"
@@ -2957,15 +3030,18 @@ fn create_eslint_config(app_type: &str) -> io::Result<()> {
                 "vue/multi-word-component-names": "error",
                 "vue/no-unused-vars": "error"
             }
-        }"#,
+        }"#
+        }
         // Add more framework-specific ESLint configs...
-        _ => r#"{
+        _ => {
+            r#"{
             "extends": ["prettier"],
             "rules": {
                 "no-unused-vars": "error",
                 "no-console": "warn"
             }
-        }"#,
+        }"#
+        }
     };
 
     fs::write(".eslintrc.json", eslint_config)?;
@@ -3015,7 +3091,8 @@ indent_size = 2
 
 fn create_docker_compose(app_type: &str) -> io::Result<()> {
     let docker_compose = match app_type {
-        "mern" => r#"
+        "mern" => {
+            r#"
 version: '3.8'
 services:
   client:
@@ -3044,8 +3121,10 @@ services:
 
 volumes:
   mongodb_data:
-"#,
-        _ => r#"
+"#
+        }
+        _ => {
+            r#"
 version: '3.8'
 services:
   app:
@@ -3054,14 +3133,13 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-"#,
+"#
+        }
     };
 
     fs::write("docker-compose.yml", docker_compose)?;
     Ok(())
 }
-
-
 
 fn create_react_files(_port: &str) -> io::Result<()> {
     let package_json = r#"{
@@ -3259,8 +3337,6 @@ fn create_mern_files(port: &str) -> io::Result<()> {
     Ok(())
 }
 
-
-
 fn create_github_workflows() -> io::Result<()> {
     fs::create_dir_all(".github/workflows")?;
 
@@ -3382,7 +3458,10 @@ fn create_optimization_configs(app_type: &str) -> io::Result<()> {
         .filter(|d| Path::new(d).exists())
         .count();
 
-    println!("📊 Found {} optional optimization directories", optional_count);
+    println!(
+        "📊 Found {} optional optimization directories",
+        optional_count
+    );
 
     // Read existing configuration if it exists
     let existing_config = if Path::new("next.config.js").exists() {
@@ -3399,19 +3478,19 @@ fn create_optimization_configs(app_type: &str) -> io::Result<()> {
                 // Merge logic here
             }
             create_nextjs_optimized_config()?;
-        },
+        }
         "react" => {
             create_nextjs_optimized_config()?;
-        },
+        }
         "vue" => {
             create_nextjs_optimized_config()?;
-        },
+        }
         "svelte" => {
             create_nextjs_optimized_config()?;
-        },
+        }
         "angular" => {
             create_nextjs_optimized_config()?;
-        },
+        }
         _ => {}
     }
 
@@ -3427,7 +3506,10 @@ fn check_docker_setup() -> io::Result<()> {
         .map_err(|_| io::Error::new(io::ErrorKind::Other, "Docker not found or not running"))?;
 
     if !docker_status.status.success() {
-        return Err(io::Error::new(io::ErrorKind::Other, "Docker is not running"));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Docker is not running",
+        ));
     }
 
     println!("✅ Docker is properly configured");
@@ -3445,13 +3527,20 @@ fn initialize_kubernetes() -> io::Result<()> {
     for namespace in namespaces.iter() {
         println!("📦 Creating namespace: {}", namespace);
         let create_output = Command::new("kubectl")
-            .args(["create", "namespace", namespace, "--dry-run=client", "-o", "yaml"])
+            .args([
+                "create",
+                "namespace",
+                namespace,
+                "--dry-run=client",
+                "-o",
+                "yaml",
+            ])
             .output()?;
 
         if !create_output.status.success() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                format!("Failed to create namespace: {}", namespace)
+                format!("Failed to create namespace: {}", namespace),
             ));
         }
     }
@@ -3464,17 +3553,19 @@ fn initialize_kubernetes() -> io::Result<()> {
     let wait_output = Command::new("kubectl")
         .args([
             "wait",
-            "--namespace", "ingress-nginx",
-            "--for=condition=ready", "pod",
+            "--namespace",
+            "ingress-nginx",
+            "--for=condition=ready",
+            "pod",
             "--selector=app.kubernetes.io/component=controller",
-            "--timeout=300s"
+            "--timeout=300s",
         ])
         .output()?;
 
     if !wait_output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Timeout waiting for NGINX Ingress Controller"
+            "Timeout waiting for NGINX Ingress Controller",
         ));
     }
 
@@ -3491,7 +3582,7 @@ fn initialize_kubernetes() -> io::Result<()> {
     if !metrics_output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Failed to install Metrics Server"
+            "Failed to install Metrics Server",
         ));
     }
 
@@ -3519,159 +3610,165 @@ fn handle_kubernetes_error(error: io::Error) -> io::Error {
             }
             error
         }
-        _ => error
+        _ => error,
     }
 }
 
 fn create_app_files(app_type: &str, port: &str) -> io::Result<()> {
-  println!("📝 Creating application files for {} framework...", app_type);
+    println!(
+        "📝 Creating application files for {} framework...",
+        app_type
+    );
 
-  // Create base directories
-  fs::create_dir_all("src")?;
-  fs::create_dir_all("public")?;
-  fs::create_dir_all("config")?;
+    // Create base directories
+    fs::create_dir_all("src")?;
+    fs::create_dir_all("public")?;
+    fs::create_dir_all("config")?;
 
-  // Create common configuration files
-  create_eslint_config(app_type)?;
-  create_prettier_config()?;
-  create_editor_config()?;
-  create_docker_compose(app_type)?;
+    // Create common configuration files
+    create_eslint_config(app_type)?;
+    create_prettier_config()?;
+    create_editor_config()?;
+    create_docker_compose(app_type)?;
 
-  // Route to specific framework file creation
-  match app_type {
-      "vue" => create_vue_files(port)?,
-      "react" => create_react_files(port)?,
-      "nuxt" => create_nuxt_files(port)?,
-      "svelte" => create_svelte_files(port)?,
-      "angular" => create_angular_files(port)?,
-      "astro" => create_astro_files(port)?,
-      "bun" => {
-          // Create basic Bun application files
-          let package_json = format!(r#"{{
-              "name": "bun-app",
-              "version": "0.1.0",
-              "scripts": {{
-                  "dev": "bun run --hot src/index.ts",
-                  "start": "bun run src/index.ts",
-                  "build": "bun build src/index.ts --outdir=dist"
-              }},
-              "dependencies": {{}},
-              "devDependencies": {{
-                  "bun-types": "latest"
-              }}
-          }}"#);
-          fs::write("package.json", package_json)?;
+    // Route to specific framework file creation
+    match app_type {
+        "vue" => create_vue_files(port)?,
+        "react" => create_react_files(port)?,
+        "nuxt" => create_nuxt_files(port)?,
+        "svelte" => create_svelte_files(port)?,
+        "angular" => create_angular_files(port)?,
+        "astro" => create_astro_files(port)?,
+        "bun" => {
+            // Create basic Bun application files
+            let package_json = format!(
+                r#"{{
+                "name": "bun-app",
+                "version": "0.1.0",
+                "scripts": {{
+                    "dev": "bun run --hot src/index.ts",
+                    "start": "bun run src/index.ts",
+                    "build": "bun build src/index.ts --outdir=dist"
+                }},
+                "dependencies": {{}},
+                "devDependencies": {{
+                    "bun-types": "latest"
+                }}
+            }}"#
+            );
+            fs::write("package.json", package_json)?;
 
-          // Create basic TypeScript configuration
-          let tsconfig = r#"{
-              "compilerOptions": {
-                  "target": "esnext",
-                  "module": "esnext",
-                  "moduleResolution": "node",
-                  "types": ["bun-types"],
-                  "esModuleInterop": true,
-                  "skipLibCheck": true,
-                  "strict": true
-              }
-          }"#;
-          fs::write("tsconfig.json", tsconfig)?;
+            // Create basic TypeScript configuration
+            let tsconfig = r#"{
+                "compilerOptions": {
+                    "target": "esnext",
+                    "module": "esnext",
+                    "moduleResolution": "node",
+                    "types": ["bun-types"],
+                    "esModuleInterop": true,
+                    "skipLibCheck": true,
+                    "strict": true
+                }
+            }"#;
+            fs::write("tsconfig.json", tsconfig)?;
 
-          // Create main application file
-          let main_file = format!(r#"
-              import {{ serve }} from "bun";
+            // Create main application file
+            let main_file = format!(
+                r#"import {{ serve }} from "bun";
+                const server = serve({{
+                    port: {},
+                    fetch(req) {{
+                        return new Response("Hello from Bun!");
+                    }},
+                }});
+                console.log(`Listening on http://localhost:{}`);
+                "#,
+                port, port
+            );
+            fs::write("src/index.ts", main_file)?;
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Unsupported application type: {}", app_type),
+            ))
+        }
+    }
 
-              const server = serve({{
-                  port: {},
-                  fetch(req) {{
-                      return new Response("Hello from Bun!");
-                  }},
-              }});
+    // Create .gitignore
+    let gitignore = r#"# Dependencies
+    node_modules/
+    .pnp
+    .pnp.js
 
-              console.log(`Listening on http://localhost:{}`);
-          "#, port, port);
-          fs::write("src/index.ts", main_file)?;
-      },
-      _ => return Err(io::Error::new(
-          io::ErrorKind::InvalidInput,
-          format!("Unsupported application type: {}", app_type)
-      )),
-  }
+    # Build outputs
+    dist
+    build
+    .next
+    out
+    .nuxt
 
-  // Create .gitignore
-  let gitignore = r#"# Dependencies
-node_modules
-.pnp
-.pnp.js
+    # Environment variables
+    .env
+    .env.local
+    .env.*.local
 
-# Build outputs
-dist
-build
-.next
-out
-.nuxt
+    # Logs
+    npm-debug.log*
+    yarn-debug.log*
+    yarn-error.log*
 
-# Environment variables
-.env
-.env.local
-.env.*.local
+    # Editor directories
+    .idea
+    .vscode
+    *.swp
+    *.swo
 
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+    # OS
+    .DS_Store
+    Thumbs.db
 
-# Editor directories
-.idea
-.vscode
-*.swp
-*.swo
+    # Build files
+    *.log
+    *.pid
+    *.seed
 
-# OS
-.DS_Store
-Thumbs.db
+    # Cache
+    .eslintcache
+    .cache
+    .parcel-cache
 
-# Build files
-*.log
-*.pid
-*.seed
+    # Docker
+    Dockerfile
+    .dockerignore
+    docker-compose*.yml
 
-# Cache
-.eslintcache
-.cache
-.parcel-cache
+    # Temporary files
+    *.tmp
+    *.temp
+    .temp
+    .tmp
 
-# Docker
-Dockerfile
-.dockerignore
-docker-compose*.yml
+    # Keep these files
+    !package.json
+    !package-lock.json
+    !yarn.lock
+    !next.config.js
+    !tsconfig.json
+    !public/
+    !src/
+    !app/
+    !pages/
+    !components/
+    !styles/
+    !lib/
+    !utils/
+    !hooks/
+    !services/
+    !api/
+    !types/"#;
+    fs::write(".gitignore", gitignore)?;
 
-# Temporary files
-*.tmp
-*.temp
-.temp
-.tmp
-
-# Keep these files
-!package.json
-!package-lock.json
-!yarn.lock
-!next.config.js
-!tsconfig.json
-!public/
-!src/
-!app/
-!pages/
-!components/
-!styles/
-!lib/
-!utils/
-!hooks/
-!services/
-!api/
-!types/
-"#;
-  fs::write(".gitignore", gitignore)?;
-
-  println!("✅ Application files created successfully!");
-  Ok(())
+    println!("✅ Application files created successfully!");
+    Ok(())
 }

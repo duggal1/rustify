@@ -21,29 +21,29 @@ impl GradientText {
 
     pub fn cyber(text: &str) -> String {
         let colors = [
-            "38;2;0;255;255",   
-            "38;2;255;0;255",   // Magenta
-            "38;2;0;255;127",   // Spring Green
+            "38;2;0;255;255",
+            "38;2;255;0;255", // Magenta
+            "38;2;0;255;127", // Spring Green
         ];
         Self::gradient_text(text, &colors)
     }
 
     pub fn rainbow(text: &str) -> String {
         let colors = [
-            "38;2;255;0;0",    // Red
-            "38;2;255;127;0",  // Orange
-            "38;2;255;255;0",  // Yellow
-            "38;2;0;255;0",    // Green
-            "38;2;0;0;255",    // Blue
-            "38;2;139;0;255",  // Violet
+            "38;2;255;0;0",   // Red
+            "38;2;255;127;0", // Orange
+            "38;2;255;255;0", // Yellow
+            "38;2;0;255;0",   // Green
+            "38;2;0;0;255",   // Blue
+            "38;2;139;0;255", // Violet
         ];
         Self::gradient_text(text, &colors)
     }
 
     pub fn status(text: &str) -> String {
         let colors = [
-            "38;2;100;149;237",  // Cornflower Blue
-            "38;2;0;191;255",    // Deep Sky Blue
+            "38;2;100;149;237", // Cornflower Blue
+            "38;2;0;191;255",   // Deep Sky Blue
         ];
         Self::gradient_text(text, &colors)
     }
@@ -57,4 +57,4 @@ impl GradientText {
         colored_text.push_str("\x1b[0m");
         colored_text
     }
-} 
+}
