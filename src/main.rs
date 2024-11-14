@@ -375,7 +375,7 @@ fn main() {
     }
 
     let app = App::new("rustify")
-        .version("2.0.5")
+        .version("2.0.6")
         .author("Harshit Duggal")
         .about("🚀 Highly optimized deployment CLI")
         .subcommand(

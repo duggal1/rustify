@@ -1,6 +1,6 @@
 [package]
 name = "rustify"
-version = "0.3.0"
+version = "2.0.6"
 authors = ["Harshit Duggal <realdug3@gmail.com>"]
 edition = "2021"
 description = "**An advanced CLI tool for streamlining containerization, orchestration, scaling, and server proxy**"
