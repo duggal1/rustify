@@ -59,7 +59,7 @@ jobs:
             target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      # Windows-specific setup (moved before build)
+      # Windows-specific setup
       - name: Setup Windows dependencies
         if: matrix.os == 'windows-latest'
         run: |
@@ -112,17 +112,30 @@ jobs:
           target: ${{ matrix.target }}
           override: true
 
-      # Build binary with warnings allowed
+      # Install cross for ARM64 Linux build
+      - name: Install cross
+        if: matrix.cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+          echo "CARGO_BUILD_TARGET=${{ matrix.target }}" >> $GITHUB_ENV
+
+      # Build binary
       - name: Build Release Binary
+        if: ${{ !matrix.cross }}
         uses: actions-rs/cargo@v1
         env:
-          RUSTFLAGS: "-C target-feature=+crt-static"  # Static linking for all platforms
+          RUSTFLAGS: "-C target-feature=+crt-static"
         with:
           command: build
           args: --release --target ${{ matrix.target }}
-          use-cross: ${{ matrix.cross }}
 
-      # Package Binary with platform-specific commands
+      # Build binary with cross
+      - name: Build Release Binary (Cross)
+        if: matrix.cross
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      # Package binaries
       - name: Package Binary (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh

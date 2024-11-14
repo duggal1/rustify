@@ -54,6 +54,12 @@ jobs:
       with:
         toolchain: stable
         override: true
+        components: rustfmt, clippy
+
+    # Add host target explicitly
+    - name: Add host target
+      run: |
+        rustup target add ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || matrix.os == 'macos-latest' && 'x86_64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
 
     - name: Check formatting
       continue-on-error: true
@@ -69,13 +75,18 @@ jobs:
         command: clippy
         args: -- -D warnings
 
+    # Modified test step
     - name: Run tests
-      env:
-        RUSTFLAGS: "-C target-feature=+crt-static"
       uses: actions-rs/cargo@v1
+      env:
+        CARGO_TERM_COLOR: always
+        CARGO_INCREMENTAL: 0
+        RUSTFLAGS: "-C target-feature=+crt-static"
+        RUST_BACKTRACE: 1
+        CARGO_NET_RETRY: 10
       with:
         command: test
-        args: --all-features
+        args: --all-features --target ${{ matrix.os == 'windows-latest' && 'x86_64-pc-windows-msvc' || matrix.os == 'macos-latest' && 'x86_64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
 
     # Docker/K8s tests only on Linux
     - name: Test Docker integration
