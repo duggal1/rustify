@@ -429,29 +429,110 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
-    // Check Kubernetes connection
-    check_kubernetes_connection()?;
-
-    // Create app files based on type
-    create_app_files(&metadata.app_type, &metadata.port)?;
-
-    create_app_files(&metadata.app_type, &metadata.port)?;
-
-    // Initialize Kubernetes if needed
-    if is_prod {
-        initialize_kubernetes()?;
+    // Step 1: Verify infrastructure and container
+    verify_infrastructure()?;
+    if let Some(container_id) = &metadata.container_id {
+        verify_container_status(container_id)?;
     }
 
-    // Initialize Docker Manager
-    let docker_manager = DockerManager::new();
-    
-    // Setup Docker environment
-    docker_manager.handle_docker_setup()?;
+    // Step 2: Generate and apply Kubernetes manifests for production
+    if is_prod {
+        generate_kubernetes_manifests(
+            &metadata.app_name,
+            &metadata.app_type,
+            &metadata.port,
+            metadata.kubernetes_metadata.replicas,
+            &metadata.kubernetes_metadata.namespace,
+            "prod"
+        )?;
 
-    // Step 2: Generate Configuration Files
-    println!("📝 Generating configuration files...");
+        apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
+
+        // Wait for deployment to be ready
+        wait_for_kubernetes_deployment(
+            &metadata.kubernetes_metadata.deployment_name,
+            &metadata.kubernetes_metadata.namespace
+        )?;
+        // Update pod status and print status
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+        update_pod_status(metadata, &namespace)?;
+        print_kubernetes_status(&metadata);
+
+        // Setup monitoring asynchronously
+        let rt = Runtime::new()?;
+        rt.block_on(async {
+            setup_monitoring(
+                &metadata.app_name,
+                &metadata.kubernetes_metadata.namespace,
+                if is_prod { "prod" } else { "dev" }
+            ).await?;
+            Ok::<(), io::Error>(())
+        })?;
+
+        // Setup auto-scaling if enabled
+        if auto_scale {
+            setup_autoscaling(
+                &metadata.app_name,
+                &metadata.kubernetes_metadata.namespace,
+                metadata.kubernetes_metadata.replicas
+            )?;
+        }
+    }
+
+    // Save updated metadata
+    save_metadata(metadata)?;
+
+    println!("✅ Deployment completed successfully!");
+    Ok(())
+}
+
+// Add this helper function to handle Kubernetes deployment
+fn deploy_to_kubernetes(metadata: &mut AppMetadata, auto_scale: bool) -> io::Result<String> {
+    let _ = auto_scale;
+    println!("🚀 Deploying to Kubernetes...");
     
-    // Generate Docker configurations
+    // Clone necessary values to avoid borrowing issues
+    let app_name = metadata.app_name.clone();
+    let app_type = metadata.app_type.clone();
+    let port = metadata.port.clone();
+    let namespace = metadata.kubernetes_metadata.namespace.clone();
+    let replicas = metadata.kubernetes_metadata.replicas;
+    let deployment_name = metadata.kubernetes_metadata.deployment_name.clone();
+    
+    // Generate and apply manifests
+    generate_kubernetes_manifests(
+        &app_name,
+        &app_type,
+        &port,
+        replicas,
+        &namespace,
+        "prod"
+    )?;
+    
+    apply_kubernetes_manifests(&namespace)?;
+    
+    // Wait for deployment
+    wait_for_kubernetes_deployment(&deployment_name, &namespace)?;
+    
+    // Update pod status first
+    let status = update_pod_status(metadata, &namespace)?;
+    
+    // Then print status using the cloned values to avoid borrowing metadata
+    print_kubernetes_status(&AppMetadata {
+        app_name: app_name.clone(),
+        app_type: app_type,
+        port: port,
+        kubernetes_metadata: metadata.kubernetes_metadata.clone(),
+        ..metadata.clone()
+    });
+    
+    Ok(format!("{}-deployment", app_name))
+}
+
+fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
+    println!("🐳 Deploying to Docker...");
+
+    // Generate Docker configuration
     let dockerfile_content = match metadata.app_type.as_str() {
         "bun" => format!(
             "FROM oven/bun:latest\n\
@@ -480,278 +561,20 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
     );
     fs::write("docker-compose.yml", docker_compose)?;
 
-    // Generate Nginx configuration
-    generate_nginx_config(&metadata.app_name, &metadata.port)?;
-
-    // Step 3: Kubernetes Setup (if production)
-    if is_prod {
-        verify_kubernetes_setup()?;
-        initialize_kubernetes()?;
-        
-        // Create namespace and prepare environment
-        let namespace = if is_prod { "production" } else { "development" };
-        create_namespace_with_quotas(namespace, if is_prod { "prod" } else { "dev" })?;
-
-        // Setup load balancing and monitoring
-        deploy_haproxy(namespace)?;
-    }
-
-    // Step 4: Build and Deploy
-    println!("🏗️ Building application...");
+    // Build Docker image
+    println!("🏗️ Building Docker image...");
     Command::new("docker")
         .args(["build", "-t", &format!("{}-app", metadata.app_name), "."])
         .status()?;
 
-    if is_prod {
-        // Production deployment
-        println!("🚀 Deploying to production...");
-        Command::new("docker-compose")
-            .args(["-f", "docker-compose.yml", "up", "-d"])
-            .status()?;
-    } else {
-        // Development deployment
-        println!("🚀 Starting development environment...");
-        Command::new("docker")
-            .args(["run", "-d", "-p", &format!("{}:{}", metadata.port, metadata.port), &format!("{}-app", metadata.app_name)])
-            .status()?;
-    }
+    // Run Docker container
+    println!("🐳 Running Docker container...");
+    let container_id = Command::new("docker")
+        .args(["run", "-d", "-p", &format!("{}:{}", metadata.port, metadata.port), &format!("{}-app", metadata.app_name)])
+        .output()?
+        .stdout;
 
-    // Step 5: Update metadata
-    metadata.status = String::from("running");
-    if let Ok(output) = Command::new("docker").args(["ps", "-q", "-l"]).output() {
-        metadata.container_id = Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    println!("✅ Deployment completed successfully!");
-    Ok(())
-}
-
-// Add the missing generate_nginx_config function
-fn generate_nginx_config(app_name: &str, port: &str) -> io::Result<()> {
-    let config = format!(r#"
-user nginx;
-worker_processes auto;
-error_log /var/log/nginx/error.log warn;
-pid /var/run/nginx.pid;
-
-events {{
-    worker_connections 1024;
-    multi_accept on;
-}}
-
-http {{
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-
-    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
-                    '$status $body_bytes_sent "$http_referer" '
-                    '"$http_user_agent" "$http_x_forwarded_for"';
-
-    access_log /var/log/nginx/access.log main;
-
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-    keepalive_timeout 65;
-    types_hash_max_size 2048;
-    server_tokens off;
-
-    gzip on;
-    gzip_disable "msie6";
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;
-
-    upstream app_servers {{
-        server localhost:{port};
-    }}
-
-    server {{
-        listen 80;
-        server_name localhost;
-
-        location / {{
-            proxy_pass http://app_servers;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection 'upgrade';
-            proxy_set_header Host $host;
-            proxy_cache_bypass $http_upgrade;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }}
-
-        location /health {{
-            access_log off;
-            return 200 'healthy\n';
-        }}
-    }}
-}}"#);
-
-    fs::write("nginx.conf", config)?;
-    Ok(())
-}
-
-fn deploy_haproxy(namespace: &str) -> io::Result<()> {
-    println!("{}", GradientText::cyber("📦 Deploying HAProxy..."));
-
-    // Create HAProxy ConfigMap
-    let haproxy_config = r#"
-global
-    daemon
-    maxconn 256
-
-defaults
-    mode http
-    timeout connect 5000ms
-    timeout client 50000ms
-    timeout server 50000ms
-
-frontend http-in
-    bind *:80
-    default_backend servers
-
-backend servers
-    balance roundrobin
-    option httpchk GET /health HTTP/1.1\r\nHost:\ localhost
-    http-check expect status 200
-    default-server inter 3s fall 3 rise 2
-    server server1 127.0.0.1:8080 check weight 100 maxconn 3000
-    server server2 127.0.0.1:8081 check weight 100 maxconn 3000
-    server server3 127.0.0.1:8082 check weight 100 maxconn 3000
-    compression algo gzip
-    compression type text/plain text/css application/javascript"#;
-
-    // Apply HAProxy ConfigMap
-    let config_map = format!(r#"
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: haproxy-config
-  namespace: {}
-data:
-  haproxy.cfg: |
-    {}
-"#, namespace, haproxy_config);
-
-    fs::write("haproxy-config.yaml", config_map)?;
-    
-    Command::new("kubectl")
-        .args(["apply", "-f", "haproxy-config.yaml"])
-        .output()?;
-
-    // Deploy HAProxy
-    let haproxy_deployment = format!(r#"
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: haproxy
-  namespace: {}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: haproxy
-  template:
-    metadata:
-      labels:
-        app: haproxy
-    spec:
-      containers:
-      - name: haproxy
-        image: haproxy:2.4
-        ports:
-        - containerPort: 80
-        volumeMounts:
-        - name: config
-          mountPath: /usr/local/etc/haproxy/
-      volumes:
-      - name: config
-        configMap:
-          name: haproxy-config
-"#, namespace);
-
-    fs::write("haproxy-deployment.yaml", haproxy_deployment)?;
-
-    Command::new("kubectl")
-        .args(["apply", "-f", "haproxy-deployment.yaml"])
-        .output()?;
-
-    // Create HAProxy Service
-    let haproxy_service = format!(r#"
-apiVersion: v1
-kind: Service
-metadata:
-  name: haproxy
-  namespace: {}
-spec:
-  type: LoadBalancer
-  ports:
-  - port: 80
-    targetPort: 80
-  selector:
-    app: haproxy
-"#, namespace);
-
-    fs::write("haproxy-service.yaml", haproxy_service)?;
-
-    Command::new("kubectl")
-        .args(["apply", "-f", "haproxy-service.yaml"]) 
-        .output()?;
-
-    println!("{}", GradientText::success("✅ HAProxy deployed successfully"));
-    Ok(())
-}
-
-fn deploy_to_kubernetes(
-    metadata: &mut AppMetadata,
-    app_name: &str,
-    app_type: &str,
-    port: &str,
-    replicas: i32,
-    namespace: &str,
-    mode: &str,
-) -> io::Result<()> {
-    println!("{}", GradientText::cyber("🎡 Initializing Kubernetes deployment..."));
-
-    // Ensure Kubernetes is ready
-    verify_kubernetes_setup()?;
-
-    // Create namespace with advanced configuration
-    create_namespace_with_quotas(namespace, mode)?;
-
-    // Deploy HAProxy
-    deploy_haproxy(namespace)?;
-
-    // Generate and apply Kubernetes manifests
-    generate_kubernetes_manifests(app_name, app_type, port, replicas, namespace, mode)?;
-    apply_kubernetes_manifests(namespace)?;
-    
-    // Set up monitoring and advanced networking
-    let rt = Runtime::new()?;
-    rt.block_on(async {
-        setup_monitoring(app_name, namespace, mode).await?;
-        let _ = setup_network_policies(app_name, namespace);
-        Ok::<(), io::Error>(())
-    })?;
-
-    // Configure auto-scaling
-    if mode == "prod" {
-        setup_autoscaling(app_name, namespace, replicas)?;
-    }
-
-    // Wait for deployment
-    wait_for_kubernetes_deployment(&metadata.kubernetes_metadata.deployment_name, namespace)?;
-
-    // Update status 
-    update_pod_status(metadata, namespace)?;
-
-    println!("{}", GradientText::success("✅ Kubernetes deployment completed successfully!"));
-    print_kubernetes_status(metadata);
-
-    Ok(())
+    Ok(String::from_utf8_lossy(&container_id).trim().to_string())
 }
 
 fn verify_docker_installation() -> io::Result<()> {
@@ -1119,6 +942,7 @@ fn verify_infrastructure() -> io::Result<()> {
 }
 
 fn install_nginx_ingress() -> io::Result<()> {
+
     // Add Nginx Ingress Controller repository
     Command::new("kubectl")
         .args([
@@ -1263,46 +1087,38 @@ spec:
     Ok(())
 }
 
-fn cleanup_deployment() -> io::Result<()> {
-    println!("{}", GradientText::cyber("🧹 Starting cleanup process..."));
+fn cleanup_deployment(app_name: &str, namespace: &str) -> io::Result<()> {
+    println!("🧹 Cleaning up old deployments...");
 
-    if let Ok(metadata_content) = fs::read_to_string(".container-metadata.json") {
-        if let Ok(metadata) = serde_json::from_str::<AppMetadata>(&metadata_content) {
-            println!("{}", GradientText::info("🔄 Stopping containers..."));
-            Command::new("docker")
-                .args(["compose", "down", "--remove-orphans"])
-                .output()?;
+    // Delete old pods
+    Command::new("kubectl")
+        .args([
+            "delete",
+            "pods",
+            "-n",
+            namespace,
+            "-l",
+            &format!("app={}", app_name),
+            "--field-selector",
+            "status.phase=Succeeded"
+        ])
+        .output()?;
 
-            println!("{}", GradientText::info("🗑️  Removing Docker images..."));
-            Command::new("docker")
-                .args(["rmi", &format!("rust-dockerize-{}", metadata.app_name), &format!("{}:latest", metadata.app_name)])
-                .output()?;
+    // Delete failed pods
+    Command::new("kubectl")
+        .args([
+            "delete",
+            "pods",
+            "-n",
+            namespace,
+            "-l",
+            &format!("app={}", app_name),
+            "--field-selector",
+            "status.phase=Failed"
+        ])
+        .output()?;
 
-            if !metadata.kubernetes_metadata.namespace.is_empty() {
-                println!("{}", GradientText::info("☸️  Cleaning up Kubernetes resources..."));
-                Command::new("kubectl")
-                    .args(["delete", "-f", "k8s-deployment.yaml", "--ignore-not-found"])
-                    .output()?;
-                Command::new("kubectl")
-                    .args(["delete", "-f", "k8s-service.yaml", "--ignore-not-found"])
-                    .output()?;
-                Command::new("kubectl")
-                    .args(["delete", "-f", "k8s-ingress.yaml", "--ignore-not-found"])
-                    .output()?;
-            }
-        }
-    }
-
-    println!("{}", GradientText::info("🗑️  Removing generated files..."));
-    let files_to_remove = [
-        "Dockerfile", "docker-compose.yml", ".container-metadata.json",
-        "k8s-deployment.yaml", "k8s-service.yaml", "k8s-ingress.yaml"
-    ];
-    for file in files_to_remove {
-        let _ = fs::remove_file(file);
-    }
-
-    println!("{}", GradientText::success("✅ Cleanup completed successfully"));
+    println!("✅ Cleanup completed");
     Ok(())
 }
 
@@ -2841,29 +2657,29 @@ fn optimize_astro_config(pkg: &mut serde_json::Value) -> io::Result<()> {
                 }
               },
             },
+          ssr: {
+            noExternal: ['@astrojs/*'],
           },
-        ssr: {
-          noExternal: ['@astrojs/*'],
         },
+        integrations: [
+          compress({
+            CSS: true,
+            HTML: {
+              removeAttributeQuotes: true,
+              removeComments: true,
+              removeRedundantAttributes: true,
+              removeScriptTypeAttributes: true,
+              removeStyleLinkTypeAttributes: true,
+              useShortDoctype: true,
+              minifyCSS: true,
+              minifyJS: true,
+            },
+            Image: true,
+            JavaScript: true,
+          }),
+          prefetch(),
+        ],
       },
-      integrations: [
-        compress({
-          CSS: true,
-          HTML: {
-            removeAttributeQuotes: true,
-            removeComments: true,
-            removeRedundantAttributes: true,
-            removeScriptTypeAttributes: true,
-            removeStyleLinkTypeAttributes: true,
-            useShortDoctype: true,
-            minifyCSS: true,
-            minifyJS: true,
-          },
-          Image: true,
-          JavaScript: true,
-        }),
-        prefetch(),
-      ],
     });"#;
 
     fs::write("astro.config.mjs", astro_config)?;
@@ -3352,6 +3168,7 @@ fn create_angular_files(_port: &str) -> io::Result<()> {
 }
 
 fn create_astro_files(port: &str) -> io::Result<()> {
+    let _ = port;
     let package_json = r#"{
         "name": "astro-app",
         "version": "0.0.1",
@@ -3380,6 +3197,7 @@ fn create_astro_files(port: &str) -> io::Result<()> {
 }
 
 fn create_remix_files(port: &str) -> io::Result<()> {
+    let _ = port;
     let package_json = r#"{
         "name": "remix-app",
         "private": true,
@@ -3414,6 +3232,7 @@ fn create_remix_files(port: &str) -> io::Result<()> {
 }
 
 fn create_mern_files(port: &str) -> io::Result<()> {
+    let _ = port;
     // Create root package.json
     let package_json = r#"{
         "name": "mern-app",
@@ -3544,7 +3363,6 @@ jobs:
     - name: Run OWASP Dependency-Check
       uses: dependency-check/Dependency-Check_Action@main
       with:
-        project: 'app'
         path: '.'
         format: 'HTML'
     
@@ -3620,10 +3438,10 @@ fn check_docker_setup() -> io::Result<()> {
 fn initialize_kubernetes() -> io::Result<()> {
     println!("🚀 Initializing Kubernetes environment...");
 
-   
+    // Step 1: Check connection and setup
     check_kubernetes_connection()?;
 
-    // Create namespaces with verification
+    // Step 2: Create namespaces
     let namespaces = ["default", "monitoring", "ingress-nginx"];
     for namespace in namespaces.iter() {
         println!("📦 Creating namespace: {}", namespace);
@@ -3639,24 +3457,10 @@ fn initialize_kubernetes() -> io::Result<()> {
         }
     }
 
-    // Install NGINX Ingress Controller with verification
-    println!("📦 Installing NGINX Ingress Controller...");
-    let ingress_output = Command::new("kubectl")
-        .args([
-            "apply",
-            "-f",
-            "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml"
-        ])
-        .output()?;
+    // Step 3: Install and configure NGINX Ingress
+    install_nginx_ingress()?;
 
-    if !ingress_output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Failed to install NGINX Ingress Controller"
-        ));
-    }
-
-    // Wait for Ingress Controller with timeout
+    // Step 4: Wait for Ingress Controller
     println!("⏳ Waiting for NGINX Ingress Controller...");
     let wait_output = Command::new("kubectl")
         .args([
@@ -3675,7 +3479,7 @@ fn initialize_kubernetes() -> io::Result<()> {
         ));
     }
 
-    // Install and verify Metrics Server
+    // Step 5: Install Metrics Server
     println!("📊 Installing Metrics Server...");
     let metrics_output = Command::new("kubectl")
         .args([
@@ -3689,19 +3493,6 @@ fn initialize_kubernetes() -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::Other,
             "Failed to install Metrics Server"
-        ));
-    }
-
-    // Verify all components are running
-    println!("🔍 Verifying Kubernetes components...");
-    let verify_output = Command::new("kubectl")
-        .args(["get", "pods", "--all-namespaces"])
-        .output()?;
-
-    if !verify_output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Failed to verify Kubernetes components"
         ));
     }
 
@@ -3836,15 +3627,49 @@ yarn-error.log*
 *.swp
 *.swo
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
+# Build files
+*.log
+*.pid
+*.seed
+
 # Cache
+.eslintcache
 .cache
 .parcel-cache
-.npm
-.eslintcache
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.temp
+.temp
+.tmp
+
+# Keep these files
+!package.json
+!package-lock.json
+!yarn.lock
+!next.config.js
+!tsconfig.json
+!public/
+!src/
+!app/
+!pages/
+!components/
+!styles/
+!lib/
+!utils/
+!hooks/
+!services/
+!api/
+!types/
 "#;
   fs::write(".gitignore", gitignore)?;
 
