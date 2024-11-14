@@ -1,5 +1,4 @@
 use chrono::Local;
-use k8s_openapi::http::status;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::thread;
@@ -443,15 +442,16 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
-    // Initialize project first (Added)
-    initialize_project(&metadata.app_type)?;
+    // Step 1: Verify infrastructure and setup
+    verify_infrastructure()?;
+    verify_kubernetes_setup()?;
 
-    // Step 1: Initial system optimizations
+    // Step 2: Initial system optimizations
     optimize_kernel_parameters()?;
     optimize_bun_runtime()?;
     enhance_load_balancer_config()?;
 
-    // Step 2: Project validation and optimization
+    // Step 3: Project validation and optimization
     if metadata.app_type == "nextjs" {
         if !validate_nextjs_project()? {
             println!("⚠️  Next.js project validation failed");
@@ -460,13 +460,30 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         optimize_existing_nextjs_project()?;
     }
 
-    // Step 3: Create Docker configurations
+    // Step 4: Setup caching layer
+    if is_prod {
+        tokio::spawn(async move {
+            if let Err(e) = setup_caching_layer().await {
+                eprintln!("Warning: Caching layer setup failed: {}", e);
+            }
+        });
+    }
+
+    // Step 5: Check Kubernetes status
+    check_kubernetes_status()?;
+
+    // Step 6: Prepare Kubernetes deployment
+    if metadata.kubernetes_enabled {
+        prepare_kubernetes_deployment(&metadata.app_name, if is_prod { "prod" } else { "dev" })?;
+    }
+
+    // Step 7: Create Docker configurations
     create_enhanced_dockerignore()?;
     create_docker_compose(&metadata.app_type)?;
     create_docker_files()?;
     create_github_workflows()?;
 
-    // Step 4: Framework-specific optimizations and files
+    // Step 8: Framework-specific optimizations and files
     optimize_existing_project(&metadata.app_type)?;
     create_optimization_configs(&metadata.app_type)?;
     match metadata.app_type.as_str() {
@@ -510,7 +527,7 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
     }
 
-    // Step 5: Initial checks and setup
+    // Step 9: Initial checks and setup
     match check_kubernetes_connection() {
         Ok(_) => println!("✅ Kubernetes connection verified"),
         Err(e) => {
@@ -520,13 +537,13 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
     }
     check_docker_setup()?;
     
-    // Step 6: Cleanup any old deployments
+    // Step 10: Cleanup any old deployments
     cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
 
-    // Step 7: Generate HAProxy config for load balancing
+    // Step 11: Generate HAProxy config for load balancing
     generate_haproxy_config(if is_prod { "prod" } else { "dev" })?;
 
-    // Step 8: Deploy to Kubernetes if enabled
+    // Step 12: Deploy to Kubernetes if enabled
     if metadata.kubernetes_enabled {
         println!("☸️  Deploying to Kubernetes...");
         
