@@ -289,6 +289,7 @@ impl DockerManager {
         }
     }
 }
+
 fn main() {
     // First check Kubernetes connection
     if let Err(e) = check_kubernetes_connection() {
@@ -446,49 +447,60 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
 fn verify_kubernetes_connection() -> io::Result<()> {
     println!("🔍 Verifying Kubernetes setup...");
 
-    // Check if Docker Desktop is running with Kubernetes
+    // Step 1: Check Docker Desktop status
     let docker_info = Command::new("docker")
         .args(["info"])
-        .output()?;
+        .output()
+        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Docker not running or not installed"))?;
 
     if !String::from_utf8_lossy(&docker_info.stdout).contains("Kubernetes: enabled") {
-        println!("⚠️ Kubernetes is not enabled in Docker Desktop");
-        println!("Please enable Kubernetes:");
-        println!("1. Open Docker Desktop");
-        println!("2. Go to Settings/Preferences");
-        println!("3. Select Kubernetes");
-        println!("4. Check 'Enable Kubernetes'");
-        println!("5. Click Apply & Restart");
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Kubernetes is not enabled in Docker Desktop"
+            "Kubernetes is not enabled in Docker Desktop. Please enable it in settings."
         ));
     }
 
-    // Verify kubectl connection
-    match Command::new("kubectl").args(["cluster-info"]).output() {
-        Ok(output) if output.status.success() => {
-            println!("✅ Connected to Kubernetes cluster");
-            
-            // Verify core components
-            let core_check = Command::new("kubectl")
-                .args(["get", "componentstatuses"])
-                .output()?;
-            
-            if core_check.status.success() {
-                println!("✅ Kubernetes core components are healthy");
-            } else {
+    // Step 2: Verify kubectl installation
+    let kubectl_version = Command::new("kubectl")
+        .arg("version")
+        .output()
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "kubectl not found in PATH"))?;
+
+    if !kubectl_version.status.success() {
+        return Err(io::Error::new(io::ErrorKind::Other, "kubectl is not properly configured"));
+    }
+
+    // Step 3: Check cluster connectivity with retries
+    for attempt in 1..=3 {
+        match Command::new("kubectl").args(["cluster-info"]).output() {
+            Ok(output) if output.status.success() => {
+                println!("✅ Successfully connected to Kubernetes cluster");
+                
+                // Additional verification: Check node status
+                if let Ok(nodes) = Command::new("kubectl")
+                    .args(["get", "nodes"])
+                    .output() 
+                {
+                    let nodes_output = String::from_utf8_lossy(&nodes.stdout);
+                    if !nodes_output.contains("Ready") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "Kubernetes nodes are not in Ready state"
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+            _ if attempt < 3 => {
+                println!("⏳ Retrying connection ({}/3)...", attempt);
+                thread::sleep(Duration::from_secs(5));
+            }
+            _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Kubernetes components are not healthy"
+                    "Failed to connect to Kubernetes cluster after 3 attempts"
                 ));
             }
-        }
-        _ => {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Cannot connect to Kubernetes cluster"
-            ));
         }
     }
 
@@ -3968,17 +3980,28 @@ fn check_docker_setup() -> io::Result<()> {
 fn initialize_kubernetes() -> io::Result<()> {
     println!("🚀 Initializing Kubernetes environment...");
 
-    // Create essential namespaces
+    // Verify prerequisites
+    verify_kubernetes_connection()?;
+
+    // Create namespaces with verification
     let namespaces = ["default", "monitoring", "ingress-nginx"];
     for namespace in namespaces.iter() {
-        Command::new("kubectl")
+        println!("📦 Creating namespace: {}", namespace);
+        let create_output = Command::new("kubectl")
             .args(["create", "namespace", namespace, "--dry-run=client", "-o", "yaml"])
             .output()?;
+
+        if !create_output.status.success() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Failed to create namespace: {}", namespace)
+            ));
+        }
     }
 
-    // Install NGINX Ingress Controller
+    // Install NGINX Ingress Controller with verification
     println!("📦 Installing NGINX Ingress Controller...");
-    Command::new("kubectl")
+    let ingress_output = Command::new("kubectl")
         .args([
             "apply",
             "-f",
@@ -3986,9 +4009,16 @@ fn initialize_kubernetes() -> io::Result<()> {
         ])
         .output()?;
 
-    // Wait for Ingress Controller to be ready
+    if !ingress_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to install NGINX Ingress Controller"
+        ));
+    }
+
+    // Wait for Ingress Controller with timeout
     println!("⏳ Waiting for NGINX Ingress Controller...");
-    Command::new("kubectl")
+    let wait_output = Command::new("kubectl")
         .args([
             "wait",
             "--namespace", "ingress-nginx",
@@ -3998,15 +4028,42 @@ fn initialize_kubernetes() -> io::Result<()> {
         ])
         .output()?;
 
-    // Install Metrics Server
+    if !wait_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Timeout waiting for NGINX Ingress Controller"
+        ));
+    }
+
+    // Install and verify Metrics Server
     println!("📊 Installing Metrics Server...");
-    Command::new("kubectl")
+    let metrics_output = Command::new("kubectl")
         .args([
             "apply",
             "-f",
             "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
         ])
         .output()?;
+
+    if !metrics_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to install Metrics Server"
+        ));
+    }
+
+    // Verify all components are running
+    println!("🔍 Verifying Kubernetes components...");
+    let verify_output = Command::new("kubectl")
+        .args(["get", "pods", "--all-namespaces"])
+        .output()?;
+
+    if !verify_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to verify Kubernetes components"
+        ));
+    }
 
     println!("✅ Kubernetes environment initialized successfully!");
     Ok(())
@@ -4021,7 +4078,7 @@ fn handle_kubernetes_error(error: io::Error) -> io::Error {
             println!("2. Kubernetes is enabled in Docker Desktop");
             println!("3. kubectl is installed and in PATH");
             error
-        },
+        }
         io::ErrorKind::Other => {
             if error.to_string().contains("connection refused") {
                 println!("❌ Cannot connect to Kubernetes cluster");
@@ -4031,9 +4088,7 @@ fn handle_kubernetes_error(error: io::Error) -> io::Error {
                 println!("3. No firewall is blocking the connection");
             }
             error
-        },
+        }
         _ => error
     }
 }
-
-
