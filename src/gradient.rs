@@ -2,6 +2,7 @@ use colored::*;
 
 pub struct GradientText;
 
+#[allow(dead_code)]
 impl GradientText {
     pub fn info(text: &str) -> String {
         text.bright_blue().bold().to_string()

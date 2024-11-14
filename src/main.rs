@@ -362,9 +362,8 @@ impl DockerManager {
         Ok(())
     }
 }
-
 fn main() {
-    // Firstnb check Kubernetes connection
+    // First check Kubernetes connection
     if let Err(e) = check_kubernetes_connection() {
         eprintln!("Error connecting to Kubernetes: {}", e);
         std::process::exit(1);
@@ -414,6 +413,11 @@ fn main() {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
+            // Create Docker files after project initialization
+            if let Err(e) = create_docker_files() {
+                eprintln!("Error creating Docker files: {}", e);
+                std::process::exit(1);
+            }
         }
         Some(("deploy", matches)) => {
             let is_prod = matches.is_present("prod");
@@ -441,6 +445,12 @@ fn main() {
                 scaling_config: ScalingConfig::default(),
             };
 
+            // Deploy with Docker first
+            if let Err(e) = deploy_with_docker(&metadata) {
+                eprintln!("Error deploying with Docker: {}", e);
+                std::process::exit(1);
+            }
+
             // Keep all the powerful infrastructure logic
             if let Err(e) = deploy_application(&mut metadata, is_prod, auto_scale) {
                 eprintln!("Error: {}", e);
@@ -454,7 +464,6 @@ fn main() {
         }
     }
 }
-
 fn deploy_application(
     metadata: &mut AppMetadata,
     is_prod: bool,
@@ -977,7 +986,7 @@ fn verify_infrastructure() -> io::Result<()> {
     {
         Ok(output) => {
             if output.status.success() {
-                println!("✅ Connected to Kubernetes cluster (docker-desktop)");
+                println!("�� Connected to Kubernetes cluster (docker-desktop)");
 
                 // Verify core components
                 let core_namespaces = Command::new("kubectl")
@@ -1739,72 +1748,72 @@ metadata:
   name: nginx-config
   namespace: {namespace}
 data:
-  nginx.conf: |
-    worker_processes auto;
-    worker_rlimit_nofile 100000;
-    
-    events {{
-        worker_connections 4096;
-        use epoll;
-        multi_accept on;
-    }}
-    
-    http {{
-        # Optimization
-        sendfile on;
-        tcp_nopush on;
-        tcp_nodelay on;
-        keepalive_timeout 65;
-        keepalive_requests 100000;
-        
-        # Bun.js Optimizations
-        upstream bun_servers {{
-            least_conn;
-            server localhost:3000 max_fails=3 fail_timeout=30s;
-            server localhost:3001 max_fails=3 fail_timeout=30s;
-            keepalive 32;
-        }}
-        
-        # Security
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_prefer_server_ciphers on;
-        ssl_session_cache shared:SSL:50m;
-        ssl_session_timeout 1d;
-        
-        # Compression
-        gzip on;
-        gzip_comp_level 6;
-        gzip_types text/plain text/css application/json application/javascript;
-        
-        server {{
-            listen 80;
-            listen [::]:80;
-            listen 443 ssl http2;
-            
-            # SSL Configuration
-            ssl_certificate /etc/nginx/ssl/tls.crt;
-            ssl_certificate_key /etc/nginx/ssl/tls.key;
-            
-            location / {{
-                proxy_pass http://bun_servers;
-                proxy_http_version 1.1;
-                proxy_set_header Upgrade $http_upgrade;
-                proxy_set_header Connection 'upgrade';
-                proxy_set_header Host $host;
-                proxy_cache_bypass $http_upgrade;
-                
-                # Security headers
-                add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-                add_header X-Frame-Options "SAMEORIGIN" always;
-                add_header X-Content-Type-Options "nosniff" always;
-            }}
-            
-            location /health {{
-                access_log off;
-                return 200 'healthy\n';
-            }}
-        }}
-    }}
+    nginx.conf: |
+      worker_processes auto;
+      worker_rlimit_nofile 100000;
+      
+      events {{
+          worker_connections 4096;
+          use epoll;
+          multi_accept on;
+      }}
+      
+      http {{
+          # Optimization
+          sendfile on;
+          tcp_nopush on;
+          tcp_nodelay on;
+          keepalive_timeout 65;
+          keepalive_requests 100000;
+          
+          # Bun.js Optimizations
+          upstream bun_servers {{
+              least_conn;
+              server localhost:3000 max_fails=3 fail_timeout=30s;
+              server localhost:3001 max_fails=3 fail_timeout=30s;
+              keepalive 32;
+          }}
+          
+          # Security
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers on;
+          ssl_session_cache shared:SSL:50m;
+          ssl_session_timeout 1d;
+          
+          # Compression
+          gzip on;
+          gzip_comp_level 6;
+          gzip_types text/plain text/css application/json application/javascript;
+          
+          server {{
+              listen 80;
+              listen [::]:80;
+              listen 443 ssl http2;
+              
+              # SSL Configuration
+              ssl_certificate /etc/nginx/ssl/tls.crt;
+              ssl_certificate_key /etc/nginx/ssl/tls.key;
+              
+              location / {{
+                  proxy_pass http://bun_servers;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host $host;
+                  proxy_cache_bypass $http_upgrade;
+                  
+                  # Security headers
+                  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+                  add_header X-Frame-Options "SAMEORIGIN" always;
+                  add_header X-Content-Type-Options "nosniff" always;
+              }}
+              
+              location /health {{
+                  access_log off;
+                  return 200 'healthy\n';
+              }}
+          }}
+      }}
 "#
     );
 
@@ -2236,7 +2245,7 @@ fn create_enhanced_dockerignore() -> io::Result<()> {
 .gitattributes
 
 # Dependencies
-node_modules
+node_modules/
 .pnp
 .pnp.js
 
@@ -2310,7 +2319,7 @@ docker-compose*.yml
 !api/
 !types/"#;
 
-    fs::write(".dockerignore", dockerignore.trim())?;
+    fs::write(".dockerignore", dockerignore)?;
     Ok(())
 }
 
@@ -3773,5 +3782,141 @@ fn create_app_files(app_type: &str, port: &str) -> io::Result<()> {
     fs::write(".gitignore", gitignore)?;
 
     println!("✅ Application files created successfully!");
+    Ok(())
+}
+
+fn create_docker_files() -> io::Result<()> {
+    let dockerfile = r#"# Build stage
+FROM node:20-alpine AS builder
+
+# Install essential build tools and jq
+RUN apk add --no-cache jq git python3 make g++
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files first for better caching
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy the rest of the application
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Production stage
+FROM node:20-alpine AS runner
+
+# Install production dependencies only
+RUN apk add --no-cache bash
+
+WORKDIR /app
+
+# Copy necessary files from builder
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/node_modules ./node_modules
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Expose the port
+EXPOSE 3000
+
+# Start the application
+CMD ["npm", "start"]"#;
+
+    let dockerignore = r#"
+# Dependencies
+node_modules
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Version control
+.git
+.gitignore
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+.next
+out
+dist
+build
+
+# IDE
+.idea
+.vscode
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage
+.nyc_output
+
+# Misc
+*.log
+.cache
+.temp"#;
+
+    // Write Docker files
+    fs::write("Dockerfile", dockerfile)?;
+    fs::write(".dockerignore", dockerignore)?;
+
+    Ok(())
+}
+
+fn deploy_with_docker(metadata: &AppMetadata) -> io::Result<()> {
+    println!("🐳 Building Docker container...");
+
+    // Build Docker image
+    let status = Command::new("docker")
+        .args([
+            "build",
+            "-t",
+            &format!("{}:latest", metadata.app_name),
+            ".",
+        ])
+        .status()?;
+
+    if !status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to build Docker image",
+        ));
+    }
+
+    // Run Docker container
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "-d",
+            "-p",
+            &format!("{}:3000", metadata.port),
+            "--name",
+            &metadata.app_name,
+            &format!("{}:latest", metadata.app_name),
+        ])
+        .status()?;
+
+    if !status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Failed to start Docker container",
+        ));
+    }
+
+    println!("✅ Docker container started successfully!");
     Ok(())
 }
