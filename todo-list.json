@@ -12,7 +12,7 @@
       "Add rollback mechanisms"
     ],
     "Advanced Monitoring": [
-      "Add ELK stack integration",
+      "Add ELK stack integrations",
       "Implement distributed tracing",
       "Add custom metrics dashboard"
     ],
