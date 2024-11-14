@@ -9,20 +9,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  CARGO_INCREMENTAL: 0
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        components: clippy, rustfmt
-        override: true
-
+    
     - name: Cache dependencies
       uses: actions/cache@v3
       with:
@@ -31,20 +25,42 @@ jobs:
           ~/.cargo/git
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: clippy, rustfmt
+        override: true
 
     - name: Check formatting
-      run: cargo fmt -- --check
+      uses: actions-rs/cargo@v1
+      with:
+        command: fmt
+        args: -- --check
 
     - name: Run clippy
-      run: cargo clippy -- -D warnings
+      uses: actions-rs/cargo@v1
+      with:
+        command: clippy
+        args: -- -D warnings
 
     - name: Run tests
-      run: cargo test
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --all-features
 
-    - name: Build
-      run: cargo build --release
+    - name: Test Docker integration
+      run: |
+        docker --version
+        docker info
+
+    - name: Test Kubernetes setup
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+        kubectl version --client
 
   docker:
     needs: test
@@ -72,7 +88,7 @@ jobs:
         platforms: linux/amd64,linux/arm64
         push: true
         tags: |
+          ${{ secrets.DOCKER_HUB_USERNAME }}/rustify:${{ github.ref_name }}
           ${{ secrets.DOCKER_HUB_USERNAME }}/rustify:latest
-          ${{ secrets.DOCKER_HUB_USERNAME }}/rustify:${{ github.sha }}
         cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/rustify:buildcache
         cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/rustify:buildcache,mode=max 

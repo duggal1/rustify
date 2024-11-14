@@ -1086,6 +1086,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "openssl-src"
+version = "300.4.0+3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a709e02f2b4aca747929cca5ed248880847c650233cf8b8cdc48f40aaf4898a6"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "openssl-sys"
 version = "0.9.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1093,6 +1102,7 @@ checksum = "45abf306cbf99debc8195b66b7346498d7b10c210de50418b5ccd7ceba08c741"
 dependencies = [
  "cc",
  "libc",
+ "openssl-src",
  "pkg-config",
  "vcpkg",
 ]
@@ -1273,7 +1283,7 @@ checksum = "719b953e2095829ee67db738b3bfa9fa368c94900df327b3f07fe6e794d2fe1f"
 
 [[package]]
 name = "rustify"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1282,6 +1292,7 @@ dependencies = [
  "futures",
  "k8s-openapi",
  "kube",
+ "openssl",
  "parking_lot",
  "proc-macro2",
  "quote",
