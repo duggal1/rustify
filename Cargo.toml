@@ -5,16 +5,9 @@ authors = ["Harshit Duggal <realdug3@gmail.com>"]
 edition = "2021"
 description = "**An advanced CLI tool for streamlining containerization, orchestration, scaling, and server proxy**"
 
-[[bin]]
-name = "rustify"
-path = "src/main.rs"
-
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = 'abort'
-strip = true
+[features]
+default = ["vendored"]
+vendored = ["openssl-sys/vendored"]
 
 [dependencies]
 chrono = "0.4"
@@ -33,4 +26,12 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full"] }
 clap = "3.2"
-openssl = { version = "0.10", features = ["vendored"] }
+openssl = "0.10"
+openssl-sys = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true

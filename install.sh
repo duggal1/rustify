@@ -101,7 +101,7 @@ esac
 BINARY_NAME="rustify-${OS}-${ARCH}.tar.gz"
 
 # GitHub repository information
-GITHUB_REPO="duggal1/rustify"
+GITHUB_REPO="yourusername/rustify"
 LATEST_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
 # Improve version checking

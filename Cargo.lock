@@ -1293,6 +1293,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "openssl",
+ "openssl-sys",
  "parking_lot",
  "proc-macro2",
  "quote",
