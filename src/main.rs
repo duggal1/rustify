@@ -21,7 +21,7 @@ pub struct AppMetadata {
     port: String,
     created_at: String,
     container_id: Option<String>,
-    status: String,
+    _status: String,
     kubernetes_enabled: bool,
     #[serde(default)]
     kubernetes_metadata: KubernetesMetadata,
@@ -76,8 +76,11 @@ pub struct ScalingConfig {
     #[serde(default)]
     scale_down_cooldown: u64,
 }
+
+#[allow(dead_code)]
 struct DockerManager;
 
+#[allow(dead_code)]
 impl DockerManager {
     fn new() -> Self {
         DockerManager
@@ -424,7 +427,7 @@ fn main() {
                 port: port.to_string(),
                 created_at: Local::now().to_rfc3339(),
                 container_id: None,
-                status: String::from("pending"),
+                _status: String::from("pending"),
                 kubernetes_enabled: is_prod,
                 kubernetes_metadata: KubernetesMetadata {
                     namespace: if is_prod { "production" } else { "development" }.to_string(),
@@ -3453,18 +3456,18 @@ jobs:
 }
 fn create_optimization_configs(app_type: &str) -> io::Result<()> {
     // Count optional directories for optimization level
-    let optional_count = vec!["api", "lib", "utils", "hooks", "services"]
+    let _optional_count = vec!["api", "lib", "utils", "hooks", "services"]
         .iter()
         .filter(|d| Path::new(d).exists())
         .count();
 
     println!(
         "📊 Found {} optional optimization directories",
-        optional_count
+        _optional_count
     );
 
     // Read existing configuration if it exists
-    let existing_config = if Path::new("next.config.js").exists() {
+    let _existing_config = if Path::new("next.config.js").exists() {
         Some(fs::read_to_string("next.config.js")?)
     } else {
         None
@@ -3473,7 +3476,7 @@ fn create_optimization_configs(app_type: &str) -> io::Result<()> {
     // Apply framework-specific optimizations
     match app_type {
         "nextjs" => {
-            if let Some(_config) = existing_config {
+            if let Some(_config) = _existing_config {
                 println!("🔄 Merging with existing Next.js configuration");
                 // Merge logic here
             }

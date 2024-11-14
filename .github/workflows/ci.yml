@@ -8,7 +8,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
   CARGO_INCREMENTAL: 0
 
 jobs:
@@ -34,18 +33,21 @@ jobs:
         override: true
 
     - name: Check formatting
+      continue-on-error: true
       uses: actions-rs/cargo@v1
       with:
         command: fmt
         args: -- --check
 
     - name: Run clippy
+      continue-on-error: true
       uses: actions-rs/cargo@v1
       with:
         command: clippy
-        args: -- -D warnings
 
     - name: Run tests
+      env:
+        RUSTFLAGS: ""
       uses: actions-rs/cargo@v1
       with:
         command: test

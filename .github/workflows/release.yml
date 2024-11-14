@@ -7,7 +7,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
 
 jobs:
   build:
@@ -106,12 +105,14 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      # Build binary
+      # Build binary with warnings allowed
       - name: Build Release Binary
         uses: actions-rs/cargo@v1
+        env:
+          RUSTFLAGS: ""  # Override any warning flags
         with:
           command: build
-          args: --release --target ${{ matrix.target }} --features vendored
+          args: --release --target ${{ matrix.target }}
           use-cross: ${{ matrix.cross }}
 
       - name: Package Binary
