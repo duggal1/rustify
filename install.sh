@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -eo pipefail
 
 # Print colorful messages with gradient effect
 GREEN='\033[0;32m'
@@ -11,7 +11,23 @@ NC='\033[0m' # No Color
 
 echo -e "${PURPLE}✨ ${CYAN}Installing rustify CLI...${NC}"
 
-# Check for Docker installation
+# Add error handling for curl commands
+curl_with_retry() {
+    local retry=0
+    local max_retries=3
+    local timeout=10
+    while [ $retry -lt $max_retries ]; do
+        if curl -fsSL --connect-timeout $timeout "$@"; then
+            return 0
+        fi
+        retry=$((retry + 1))
+        echo -e "${CYAN}Retry $retry/$max_retries...${NC}"
+        sleep 2
+    done
+    return 1
+}
+
+# Improve Docker check
 check_docker() {
     if ! command -v docker &> /dev/null; then
         echo -e "${CYAN}🐳 ${BLUE}Installing Docker...${NC}"
@@ -19,9 +35,11 @@ check_docker() {
             echo -e "${PURPLE}Please install Docker Desktop from https://www.docker.com/products/docker-desktop${NC}"
             exit 1
         elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            curl -fsSL https://get.docker.com -o get-docker.sh
+            curl_with_retry https://get.docker.com -o get-docker.sh
             sudo sh get-docker.sh
             sudo usermod -aG docker $USER
+            sudo systemctl enable docker
+            sudo systemctl start docker
             echo -e "${GREEN}✅ ${CYAN}Docker installed successfully${NC}"
         fi
     else
@@ -29,8 +47,21 @@ check_docker() {
     fi
 }
 
-# Add Docker check
-check_docker
+# Add Kubernetes check
+check_kubernetes() {
+    if ! command -v kubectl &> /dev/null; then
+        echo -e "${CYAN}☸️ ${BLUE}Installing kubectl...${NC}"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            brew install kubectl
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            curl_with_retry -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+        fi
+        echo -e "${GREEN}✅ ${CYAN}kubectl installed successfully${NC}"
+    else
+        echo -e "${GREEN}✅ ${CYAN}kubectl is already installed${NC}"
+    fi
+}
 
 # Check for required tools
 command -v curl >/dev/null 2>&1 || { 
@@ -75,7 +106,7 @@ LATEST_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
 # Get latest version dynamically
 echo -e "${CYAN}📡 Fetching latest version...${NC}"
-VERSION=$(curl -sL $LATEST_URL | grep '"tag_name":' | cut -d'"' -f4)
+VERSION=$(curl_with_retry $LATEST_URL | grep '"tag_name":' | cut -d'"' -f4)
 
 if [ -z "$VERSION" ]; then
     echo -e "${RED}❌ Failed to fetch latest version${NC}"
@@ -168,10 +199,13 @@ echo -e "${CYAN}📋 ${BLUE}Installed version:${NC}"
 # Verify checksum
 echo -e "${CYAN}🔒 Verifying binary integrity...${NC}"
 CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
-curl -sL "$CHECKSUM_URL" > "$TMP_DIR/checksum"
+curl_with_retry "$CHECKSUM_URL" > "$TMP_DIR/checksum"
 cd "$TMP_DIR"
 sha256sum -c checksum || {
     echo -e "${RED}❌ Checksum verification failed${NC}"
     exit 1
 }
 
+# Run installation checks
+check_docker
+check_kubernetes

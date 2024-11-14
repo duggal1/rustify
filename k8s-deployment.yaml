@@ -23,6 +23,13 @@ spec:
         env:
         - name: PORT
           value: "3000"
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "250m"
+            memory: "256Mi"
         livenessProbe:
           httpGet:
             path: /health
