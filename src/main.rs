@@ -460,21 +460,37 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
     // Step 3: Create Docker configurations
     create_enhanced_dockerignore()?;
     create_docker_compose(&metadata.app_type)?;
+    create_docker_files()?;  // Added
+    create_github_workflows()?;  // Added
 
-    // Step 4: Framework-specific optimizations
+    // Step 4: Framework-specific optimizations and files
     optimize_existing_project(&metadata.app_type)?;
+    create_optimization_configs(&metadata.app_type)?;  // Added
     match metadata.app_type.as_str() {
-        "react" => optimize_react_config(&mut serde_json::Value::Null)?,
+        "react" => {
+            optimize_react_config(&mut serde_json::Value::Null)?;
+            create_react_files(&metadata.port)?;  // Added
+        },
         "vue" => {
             optimize_vue_config(&mut serde_json::Value::Null)?;
             create_vue_files(&metadata.port)?;
-        }
+        },
         "nextjs" => create_nextjs_optimized_config()?,
-        _ => {}
+        "angular" => create_angular_files(&metadata.port)?,  // Added
+        "svelte" => create_svelte_files(&metadata.port)?,  // Added
+        "astro" => create_astro_files(&metadata.port)?,  // Added
+        "mern" => create_mern_files(&metadata.port)?,  // Added
+        "remix" => create_remix_files(&metadata.port)?,  // Added
+        _ => create_app_files(&metadata.app_type, &metadata.port)?,  // Added default case
     }
-
     // Step 5: Initial checks and setup
-    check_kubernetes_connection()?;
+    match check_kubernetes_connection() {
+        Ok(_) => println!("✅ Kubernetes connection verified"),
+        Err(e) => {
+            let handled_error = handle_kubernetes_error(e);
+            return Err(handled_error);
+        }
+    }
     check_docker_setup()?;
     
     // Step 6: Cleanup any old deployments
@@ -493,6 +509,12 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         // Install NGINX Ingress Controller
         install_nginx_ingress()?;
         
+        // Setup HPA if auto-scaling is enabled
+        setup_horizontal_pod_autoscaler(  // Added
+            &metadata.app_name,
+            &metadata.kubernetes_metadata.namespace
+        )?;
+        
         // Generate and apply Kubernetes manifests
         generate_kubernetes_manifests(
             &metadata.app_name,
@@ -503,24 +525,20 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
             if is_prod { "prod" } else { "dev" }
         )?;
         
+        // Rest of existing Kubernetes deployment code...
         apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
-        
-        // Setup network policies
         setup_network_policies(
             &metadata.app_name,
             &metadata.kubernetes_metadata.namespace
         )?;
-
-        // Wait for deployment and update status
         wait_for_kubernetes_deployment(
             &metadata.kubernetes_metadata.deployment_name,
             &metadata.kubernetes_metadata.namespace
         )?;
         let namespace = metadata.kubernetes_metadata.namespace.clone();
         update_pod_status(metadata, &namespace)?;
-        print_kubernetes_status(metadata);
+        print_kubernetes_status(&metadata);
 
-        // Create ingress
         if let Ok(ingress_host) = create_kubernetes_ingress(
             &metadata.app_name,
             &metadata.kubernetes_metadata.namespace,
@@ -529,7 +547,6 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         ) {
             metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
         }
-        // Setup monitoring and auto-scaling
         if is_prod {
             let app_name = metadata.app_name.clone();
             let namespace = metadata.kubernetes_metadata.namespace.clone();
@@ -537,12 +554,13 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
                 if let Err(e) = setup_monitoring(
                     &app_name,
                     &namespace, 
-                    if is_prod { "prod" } else { "dev" }
+                    "prod"
                 ).await {
                     eprintln!("Warning: Monitoring setup failed: {}", e);
                 }
             });
         }
+        
 
         if auto_scale {
             setup_autoscaling(
@@ -553,11 +571,11 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
         }
     } else {
         println!("🐳 Deploying with Docker...");
+        deploy_with_docker(metadata)?;  // This now returns io::Result<()>
         let container_id = deploy_to_docker(metadata)?;
         metadata.container_id = Some(container_id);
     }
 
-    // Save final state
     save_metadata(metadata)?;
     println!("✅ Deployment completed successfully!");
     Ok(())
@@ -686,7 +704,8 @@ fn verify_container_status(container_id: &str) -> io::Result<()> {
 fn save_metadata(metadata: &AppMetadata) -> io::Result<()> {
     let json = serde_json::to_string_pretty(metadata)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    fs::write(".container-metadata.json", json)
+    fs::write(".container-metadata.json", json)?;
+    Ok(())
 }
 
 fn generate_kubernetes_manifests(
@@ -3977,49 +3996,54 @@ coverage
 
 fn deploy_with_docker(metadata: &AppMetadata) -> io::Result<()> {
     println!("🐳 Building Docker container...");
-
-    // Build Docker image
-    let status = Command::new("docker")
+    
+    // Create necessary Docker files
+    create_docker_files()?;
+    
+    // Build the Docker image
+    let build_status = Command::new("docker")
         .args([
             "build",
             "-t",
-            &format!("{}:latest", metadata.app_name),
-            ".",
+            &format!("{}-app", metadata.app_name),
+            "."
         ])
         .status()?;
 
-    if !status.success() {
+    if !build_status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Failed to build Docker image",
+            "Failed to build Docker image"
         ));
     }
 
-    // Run Docker container
-    let status = Command::new("docker")
+    // Run the container
+    let run_output = Command::new("docker")
         .args([
             "run",
             "-d",
             "-p",
-            &format!("{}:3000", metadata.port),
-            "--name",
-            &metadata.app_name,
-            &format!("{}:latest", metadata.app_name),
+            &format!("{}:{}", metadata.port, metadata.port),
+            &format!("{}-app", metadata.app_name)
         ])
-        .status()?;
+        .output()?;
 
-    if !status.success() {
+    if !run_output.status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Failed to start Docker container",
+            format!("Failed to run container: {}", 
+                String::from_utf8_lossy(&run_output.stderr))
         ));
     }
 
-    println!("✅ Docker container started successfully!");
+    let container_id = String::from_utf8_lossy(&run_output.stdout).trim().to_string();
+    println!("✅ Container started with ID: {}", container_id);
+
+    // Verify container status
+    verify_container_status(&container_id)?;
+
     Ok(())
 }
-
-
 
 fn setup_horizontal_pod_autoscaler(app_name: &str, namespace: &str) -> io::Result<()> {
   println!("⚖️  Setting up Horizontal Pod Autoscaler...");
