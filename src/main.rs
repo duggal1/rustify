@@ -1,4 +1,5 @@
 use chrono::Local;
+use k8s_openapi::http::status;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::thread;
@@ -363,27 +364,10 @@ impl DockerManager {
     }
 }
 fn main() {
-    // First check Kubernetes connection
-    if let Err(e) = check_kubernetes_connection() {
-        eprintln!("Error connecting to Kubernetes: {}", e);
-        std::process::exit(1);
-    }
-
     let app = App::new("rustify")
         .version("0.1.0")
         .author("Harshit Duggal")
         .about("🚀 Ultra-optimized deployment CLI")
-        .subcommand(
-            SubCommand::with_name("init")
-                .about("Initialize project")
-                .arg(
-                    Arg::with_name("type")
-                        .long("type")
-                        .value_name("TYPE")
-                        .help("Project type (default: bun)")
-                        .takes_value(true),
-                ),
-        )
         .subcommand(
             SubCommand::with_name("deploy")
                 .about("Deploy application")
@@ -402,29 +386,22 @@ fn main() {
                     Arg::with_name("rpl")
                         .long("rpl")
                         .help("Enable auto-scaling replicas"),
+                )
+                .arg(
+                    Arg::with_name("cleanup")
+                        .long("cleanup")
+                        .help("Cleanup old deployments before deploying"),
                 ),
         )
         .get_matches();
 
     match app.subcommand() {
-        Some(("init", matches)) => {
-            let project_type = matches.value_of("type").unwrap_or("bun");
-            if let Err(e) = initialize_project(project_type) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
-            // Create Docker files after project initialization
-            if let Err(e) = create_docker_files() {
-                eprintln!("Error creating Docker files: {}", e);
-                std::process::exit(1);
-            }
-        }
         Some(("deploy", matches)) => {
             let is_prod = matches.is_present("prod");
             let port = matches.value_of("port").unwrap_or("8000");
             let auto_scale = matches.is_present("rpl");
+            let cleanup = matches.is_present("cleanup");
 
-            // Create metadata
             let mut metadata = AppMetadata {
                 app_name: "app".to_string(),
                 app_type: "bun".to_string(),
@@ -445,13 +422,13 @@ fn main() {
                 scaling_config: ScalingConfig::default(),
             };
 
-            // Deploy with Docker first
-            if let Err(e) = deploy_with_docker(&metadata) {
-                eprintln!("Error deploying with Docker: {}", e);
-                std::process::exit(1);
+            // Perform cleanup if requested
+            if cleanup {
+                if let Err(e) = cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace) {
+                    eprintln!("Warning: Cleanup failed: {}", e);
+                }
             }
 
-            // Keep all the powerful infrastructure logic
             if let Err(e) = deploy_application(&mut metadata, is_prod, auto_scale) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
@@ -459,79 +436,151 @@ fn main() {
         }
         _ => {
             println!("Usage:");
-            println!("  rustify init [--type <type>]");
-            println!("  rustify deploy [--prod] [--port <port>] [--rpl]");
+            println!("  rustify deploy [--prod] [--port <port>] [--rpl] [--cleanup]");
         }
     }
 }
-fn deploy_application(
-    metadata: &mut AppMetadata,
-    is_prod: bool,
-    auto_scale: bool,
-) -> io::Result<()> {
+fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
-    // Step 1: Verify infrastructure and container
-    verify_infrastructure()?;
-    if let Some(container_id) = &metadata.container_id {
-        verify_container_status(container_id)?;
-    }
+    // Step 1: Initial checks and setup
+    check_kubernetes_connection()?;
+    
+    // Step 2: Cleanup any old deployments
+    cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
 
-    // Step 2: Generate and apply Kubernetes manifests for production
-    if is_prod {
+    // Step 3: Generate HAProxy config for load balancing
+    generate_haproxy_config(if is_prod { "prod" } else { "dev" })?;
+
+    // Step 4: Deploy to Kubernetes if enabled
+    if metadata.kubernetes_enabled {
+        println!("☸️  Deploying to Kubernetes...");
+        
+        // Setup security and caching layers
+        tokio::spawn(async move {
+            if let Err(e) = setup_security_layer(
+                &metadata.app_name,
+                &metadata.kubernetes_metadata.namespace
+            ).await {
+                eprintln!("Warning: Security layer setup failed: {}", e);
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = setup_caching_layer().await {
+                eprintln!("Warning: Caching layer setup failed: {}", e);
+            }
+        });
+
+        // Setup Redis and Varnish
+        tokio::spawn(async move {
+            if let Err(e) = setup_redis_cluster().await {
+                eprintln!("Warning: Redis cluster setup failed: {}", e);
+            }
+        });
+
+        tokio::spawn(async move {
+            if let Err(e) = setup_varnish_cache().await {
+                eprintln!("Warning: Varnish cache setup failed: {}", e);
+            }
+        });
+
+        // Setup load balancing
+        tokio::spawn(async move {
+            if let Err(e) = setup_load_balancing(if is_prod { "prod" } else { "dev" }).await {
+                eprintln!("Warning: Load balancing setup failed: {}", e);
+            }
+        });
+        };
+
+        // Deploy Nginx
+        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
+
+        // Setup network policies
+        setup_network_policies(
+            &metadata.app_name,
+            &metadata.kubernetes_metadata.namespace
+        )?;
+
+        // Install NGINX Ingress Controller if needed
+        install_nginx_ingress()?;
+        
+        // Generate Kubernetes manifests
         generate_kubernetes_manifests(
             &metadata.app_name,
             &metadata.app_type,
             &metadata.port,
             metadata.kubernetes_metadata.replicas,
             &metadata.kubernetes_metadata.namespace,
-            "prod",
+            if is_prod { "prod" } else { "dev" }
         )?;
-    }
+        
+        // Apply Kubernetes manifests
+        apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
+        
+        // Wait for deployment to be ready
+        wait_for_kubernetes_deployment(
+            &metadata.kubernetes_metadata.deployment_name,
+            &metadata.kubernetes_metadata.namespace
+        )?;
 
-    // Save updated metadata
+        // Store values we need before borrowing metadata
+        let app_name = metadata.app_name.clone();
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+        let port = metadata.port.clone();
+        
+        // Update pod status
+        update_pod_status(metadata, &namespace)?;
+        
+        // Print current Kubernetes status
+        print_kubernetes_status(&metadata);
+
+        // Create Kubernetes ingress
+        if let Ok(ingress_host) = create_kubernetes_ingress(
+            &app_name,
+            &namespace,
+            &port,
+            if is_prod { "prod" } else { "dev" }
+        ) {
+            metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
+        }
+
+        // Setup monitoring if in production
+        if is_prod {
+            let app_name = app_name.clone();
+            let namespace = namespace.clone();
+            let is_prod = is_prod;
+            tokio::spawn(async move {
+                if let Err(e) = setup_monitoring(
+                    &app_name,
+                    &namespace,
+                    if is_prod { "prod" } else { "dev" }
+                ).await {
+                    eprintln!("Warning: Monitoring setup failed: {}", e);
+                }
+            });
+        }
+
+        // Configure auto-scaling if enabled
+        Ok(if auto_scale {
+            setup_autoscaling(
+                &metadata.app_name,
+                &metadata.kubernetes_metadata.namespace,
+                if is_prod { 2 } else { 1 }
+            )?;
+        })
+    } else {
+        // Existing Docker deployment code...
+        println!("🐳 Deploying with Docker...");
+        let container_id = deploy_to_docker(metadata)?;
+        metadata.container_id = Some(container_id);
+        Ok(()) // Add explicit return for else branch
+    };  // Add semicolon after if/else expression
+
     save_metadata(metadata)?;
-
     println!("✅ Deployment completed successfully!");
     Ok(())
 }
-
-// Add this helper function to handle Kubernetes deployment
-fn deploy_to_kubernetes(metadata: &mut AppMetadata, auto_scale: bool) -> io::Result<String> {
-    let _ = auto_scale;
-    println!("🚀 Deploying to Kubernetes...");
-
-    // Clone necessary values to avoid borrowing issues
-    let app_name = metadata.app_name.clone();
-    let app_type = metadata.app_type.clone();
-    let port = metadata.port.clone();
-    let namespace = metadata.kubernetes_metadata.namespace.clone();
-    let replicas = metadata.kubernetes_metadata.replicas;
-    let deployment_name = metadata.kubernetes_metadata.deployment_name.clone();
-
-    // Generate and apply manifests
-    generate_kubernetes_manifests(&app_name, &app_type, &port, replicas, &namespace, "prod")?;
-
-    apply_kubernetes_manifests(&namespace)?;
-
-    // Wait for deployment
-    wait_for_kubernetes_deployment(&deployment_name, &namespace)?;
-
-    // Update pod status first
-    let status = update_pod_status(metadata, &namespace)?;
-
-    // Then print status using the cloned values to avoid borrowing metadata
-    print_kubernetes_status(&AppMetadata {
-        app_name: app_name.clone(),
-        app_type: app_type,
-        port: port,
-        kubernetes_metadata: metadata.kubernetes_metadata.clone(),
-        ..metadata.clone()
-    });
-
-    Ok(format!("{}-deployment", app_name))
-}
-
 fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
     println!("🐳 Deploying to Docker...");
 
@@ -860,40 +909,107 @@ fn update_pod_status(metadata: &mut AppMetadata, namespace: &str) -> io::Result<
 
 fn create_kubernetes_ingress(
     app_name: &str,
-    port: &str,
     namespace: &str,
+    port: &str,
     mode: &str,
 ) -> io::Result<String> {
-    let _ = mode;
-    let ingress = format!(
+    println!("🔧 Creating Kubernetes ingress...");
+
+    // Define TLS and annotations based on mode
+    let (tls_config, annotations) = if mode == "prod" {
+        (
+            r#"
+  tls:
+  - hosts:
+    - app.example.com
+    secretName: tls-secret"#,
+            r#"
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "128k""#,
+        )
+    } else {
+        (
+            "",
+            r#"
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/ssl-redirect: "false""#,
+        )
+    };
+
+    // Create ingress manifest
+    let ingress_manifest = format!(
         r#"apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {app_name}-ingress
-  namespace: {namespace}
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
-spec:
+  name: {}-ingress
+  namespace: {}
+  annotations:{} 
+spec:{}
   rules:
-  - host: {app_name}.local
+  - host: {}
     http:
       paths:
       - path: /
         pathType: Prefix
         backend:
           service:
-            name: {app_name}-service
+            name: {}-service
             port:
-              number: {port}"#
+              number: {}"#,
+        app_name,
+        namespace,
+        annotations,
+        tls_config,
+        if mode == "prod" {
+            "app.example.com"
+        } else {
+            app_name
+        },
+        app_name,
+        port
     );
 
-    fs::write("k8s-ingress.yaml", ingress)?;
+    // Write manifest to file
+    fs::write("k8s-ingress.yaml", ingress_manifest)?;
 
-    Command::new("kubectl")
-        .args(["apply", "-f", "k8s-ingress.yaml"])
+    // Apply ingress manifest
+    let output = Command::new("kubectl")
+        .args([
+            "apply",
+            "-f",
+            "k8s-ingress.yaml",
+            "-n",
+            namespace,
+        ])
         .output()?;
 
-    Ok(format!("{}.local", app_name))
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Failed to create ingress: {}", error),
+        ));
+    }
+
+    // Wait for ingress to be ready
+    println!("⏳ Waiting for ingress to be ready...");
+    thread::sleep(Duration::from_secs(5));
+
+    // Get ingress host
+    let host = if mode == "prod" {
+        "app.example.com".to_string()
+    } else {
+        format!("{}.local", app_name)
+    };
+
+    println!("✅ Ingress created successfully");
+    println!("🌐 Application will be available at: https://{}", host);
+
+    Ok(host)
 }
 
 fn print_kubernetes_status(metadata: &AppMetadata) {
@@ -986,7 +1102,7 @@ fn verify_infrastructure() -> io::Result<()> {
     {
         Ok(output) => {
             if output.status.success() {
-                println!("�� Connected to Kubernetes cluster (docker-desktop)");
+                println!(" Connected to Kubernetes cluster (docker-desktop)");
 
                 // Verify core components
                 let core_namespaces = Command::new("kubectl")
@@ -3919,4 +4035,130 @@ fn deploy_with_docker(metadata: &AppMetadata) -> io::Result<()> {
 
     println!("✅ Docker container started successfully!");
     Ok(())
+}
+
+
+
+fn setup_horizontal_pod_autoscaler(app_name: &str, namespace: &str) -> io::Result<()> {
+  println!("⚖️  Setting up Horizontal Pod Autoscaler...");
+
+  // Create HPA manifest
+  let hpa_manifest = format!(
+      r#"apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+name: {}-hpa
+namespace: {}
+spec:
+scaleTargetRef:
+  apiVersion: apps/v1
+  kind: Deployment
+  name: {}-deployment
+minReplicas: 1
+maxReplicas: 10
+metrics:
+- type: Resource
+  resource:
+    name: cpu
+    target:
+      type: Utilization
+      averageUtilization: 70
+- type: Resource
+  resource:
+    name: memory
+    target:
+      type: Utilization
+      averageUtilization: 80
+behavior:
+  scaleUp:
+    stabilizationWindowSeconds: 60
+    policies:
+    - type: Pods
+      value: 2
+      periodSeconds: 60
+  scaleDown:
+    stabilizationWindowSeconds: 300
+    policies:
+    - type: Pods
+      value: 1
+      periodSeconds: 60"#,
+      app_name, namespace, app_name
+  );
+
+  // Write HPA manifest to file
+  fs::write("k8s-hpa.yaml", hpa_manifest)?;
+
+  // Apply HPA manifest
+  let output = Command::new("kubectl")
+      .args([
+          "apply",
+          "-f",
+          "k8s-hpa.yaml",
+          "-n",
+          namespace,
+      ])
+      .output()?;
+
+  if !output.status.success() {
+      let error = String::from_utf8_lossy(&output.stderr);
+      return Err(io::Error::new(
+          io::ErrorKind::Other,
+          format!("Failed to create HPA: {}", error),
+      ));
+  }
+
+  // Verify HPA creation
+  let verify_output = Command::new("kubectl")
+      .args([
+          "get",
+          "hpa",
+          &format!("{}-hpa", app_name),
+          "-n",
+          namespace,
+          "-o",
+          "jsonpath={.status.conditions[?(@.type=='Ready')].status}",
+      ])
+      .output()?;
+
+  if !verify_output.status.success() {
+      println!("⚠️  Warning: HPA created but status verification failed");
+  } else {
+      let status = String::from_utf8_lossy(&verify_output.stdout);
+      if status.contains("True") {
+          println!("✅ HPA configured successfully");
+      } else {
+          println!("⚠️  Warning: HPA created but not yet ready");
+      }
+  }
+
+  // Optional: Wait for HPA to be ready
+  println!("⏳ Waiting for HPA to be ready...");
+  let mut retries = 0;
+  while retries < 30 {
+      let status = Command::new("kubectl")
+          .args([
+              "get",
+              "hpa",
+              &format!("{}-hpa", app_name),
+              "-n",
+              namespace,
+              "-o",
+              "jsonpath={.status.currentReplicas}",
+          ])
+          .output()?;
+
+      if status.status.success() {
+          println!("✅ HPA is active and monitoring the deployment");
+          break;
+      }
+
+      thread::sleep(Duration::from_secs(2));
+      retries += 1;
+  }
+
+  if retries >= 30 {
+      println!("⚠️  Warning: HPA setup complete but activation timed out");
+  }
+
+  Ok(())
 }
