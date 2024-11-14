@@ -12,7 +12,12 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v3
     
@@ -25,11 +30,29 @@ jobs:
           target
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+    # Windows-specific setup
+    - name: Setup Windows dependencies
+      if: matrix.os == 'windows-latest'
+      run: |
+        vcpkg integrate install
+        vcpkg install openssl:x64-windows-static
+        echo "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static" >> $env:GITHUB_ENV
+        echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+      shell: pwsh
+
+    # macOS-specific setup
+    - name: Setup macOS dependencies
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install openssl@3
+        echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
+        echo "OPENSSL_INCLUDE_DIR=$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
+        echo "OPENSSL_LIB_DIR=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
+
     - name: Install Rust
       uses: actions-rs/toolchain@v1
       with:
         toolchain: stable
-        components: clippy, rustfmt
         override: true
 
     - name: Check formatting
@@ -44,21 +67,25 @@ jobs:
       uses: actions-rs/cargo@v1
       with:
         command: clippy
+        args: -- -D warnings
 
     - name: Run tests
       env:
-        RUSTFLAGS: ""
+        RUSTFLAGS: "-C target-feature=+crt-static"
       uses: actions-rs/cargo@v1
       with:
         command: test
         args: --all-features
 
+    # Docker/K8s tests only on Linux
     - name: Test Docker integration
+      if: matrix.os == 'ubuntu-latest'
       run: |
         docker --version
         docker info
 
     - name: Test Kubernetes setup
+      if: matrix.os == 'ubuntu-latest'
       run: |
         curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
         sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
@@ -93,4 +120,4 @@ jobs:
           ${{ secrets.DOCKER_HUB_USERNAME }}/rustify:${{ github.ref_name }}
           ${{ secrets.DOCKER_HUB_USERNAME }}/rustify:latest
         cache-from: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/rustify:buildcache
-        cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/rustify:buildcache,mode=max 
+        cache-to: type=registry,ref=${{ secrets.DOCKER_HUB_USERNAME }}/rustify:buildcache,mode=max
