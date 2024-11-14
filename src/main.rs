@@ -443,6 +443,9 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
+    // Initialize project first (Added)
+    initialize_project(&metadata.app_type)?;
+
     // Step 1: Initial system optimizations
     optimize_kernel_parameters()?;
     optimize_bun_runtime()?;
@@ -460,29 +463,53 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
     // Step 3: Create Docker configurations
     create_enhanced_dockerignore()?;
     create_docker_compose(&metadata.app_type)?;
-    create_docker_files()?;  // Added
-    create_github_workflows()?;  // Added
+    create_docker_files()?;
+    create_github_workflows()?;
 
     // Step 4: Framework-specific optimizations and files
     optimize_existing_project(&metadata.app_type)?;
-    create_optimization_configs(&metadata.app_type)?;  // Added
+    create_optimization_configs(&metadata.app_type)?;
     match metadata.app_type.as_str() {
         "react" => {
             optimize_react_config(&mut serde_json::Value::Null)?;
-            create_react_files(&metadata.port)?;  // Added
+            create_react_files(&metadata.port)?;
         },
         "vue" => {
             optimize_vue_config(&mut serde_json::Value::Null)?;
             create_vue_files(&metadata.port)?;
         },
         "nextjs" => create_nextjs_optimized_config()?,
-        "angular" => create_angular_files(&metadata.port)?,  // Added
-        "svelte" => create_svelte_files(&metadata.port)?,  // Added
-        "astro" => create_astro_files(&metadata.port)?,  // Added
-        "mern" => create_mern_files(&metadata.port)?,  // Added
-        "remix" => create_remix_files(&metadata.port)?,  // Added
-        _ => create_app_files(&metadata.app_type, &metadata.port)?,  // Added default case
+        "angular" => create_angular_files(&metadata.port)?,
+        "svelte" => create_svelte_files(&metadata.port)?,
+        "astro" => create_astro_files(&metadata.port)?,
+        "mern" => create_mern_files(&metadata.port)?,
+        "remix" => create_remix_files(&metadata.port)?,
+        _ => create_app_files(&metadata.app_type, &metadata.port)?,
     }
+
+    // Added: Setup security and caching layers for production
+    if is_prod {
+        let app_name = metadata.app_name.clone();
+        let namespace = metadata.kubernetes_metadata.namespace.clone();
+        tokio::spawn(async move {
+            if let Err(e) = setup_security_layer(&app_name, &namespace).await {
+                eprintln!("Warning: Security layer setup failed: {}", e);
+            }
+            if let Err(e) = setup_redis_cluster().await {
+                eprintln!("Warning: Redis cluster setup failed: {}", e);
+            }
+            if let Err(e) = setup_varnish_cache().await {
+                eprintln!("Warning: Varnish cache setup failed: {}", e);
+            }
+            if let Err(e) = setup_load_balancing("prod").await {
+                eprintln!("Warning: Load balancing setup failed: {}", e);
+            }
+        });
+
+        // Deploy Nginx in production
+        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
+    }
+
     // Step 5: Initial checks and setup
     match check_kubernetes_connection() {
         Ok(_) => println!("✅ Kubernetes connection verified"),
