@@ -111,7 +111,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --release --target ${{ matrix.target }} --features vendored
+          args: --release --target ${{ matrix.target }}
           use-cross: ${{ matrix.cross }}
 
       # Package binary
