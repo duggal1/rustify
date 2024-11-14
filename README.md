@@ -280,5 +280,3 @@ Features:
 - Kubernetes deployment
 - Security scanning
 ```
-
-This guide covers all the major features and capabilities of the Rustify CLI. For additional help or specific use cases, refer to the documentation or raise an issue on GitHub.
