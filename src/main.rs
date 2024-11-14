@@ -366,7 +366,7 @@ fn main() {
     let app = App::new("rustify")
         .version("0.1.0")
         .author("Harshit Duggal")
-        .about("🚀 Ultra-optimized deployment CLI")
+        .about("🚀 Highly optimized deployment CLI")
         .subcommand(
             SubCommand::with_name("deploy")
                 .about("Deploy application")
@@ -437,6 +437,12 @@ fn main() {
             println!("Usage:");
             println!("  rustify deploy [--prod] [--port <port>] [--rpl] [--cleanup]");
         }
+    }
+
+    // Verify Docker installation
+    if let Err(e) = verify_docker_installation() {
+        eprintln!("Error verifying Docker installation: {}", e);
+        std::process::exit(1);
     }
 }
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
@@ -4210,5 +4216,5 @@ behavior:
       println!("⚠️  Warning: HPA setup complete but activation timed out");
   }
 
-  Ok(())
+    Ok(())
 }

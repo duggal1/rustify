@@ -2,6 +2,8 @@
     "git.ignoreLimitWarning": true,
     "rust-analyzer.diagnostics.useRustcErrorCode": true,
     "cSpell.words": [
-        "astro"
+        "astro",
+        "Highly",
+        "optimize"
     ]
 }
