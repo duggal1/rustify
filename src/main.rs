@@ -443,69 +443,57 @@ fn main() {
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
 
-    // Step 1: Initial checks and setup
+    // Step 1: Initial system optimizations
+    optimize_kernel_parameters()?;
+    optimize_bun_runtime()?;
+    enhance_load_balancer_config()?;
+
+    // Step 2: Project validation and optimization
+    if metadata.app_type == "nextjs" {
+        if !validate_nextjs_project()? {
+            println!("⚠️  Next.js project validation failed");
+            return Err(io::Error::new(io::ErrorKind::Other, "Invalid Next.js project structure"));
+        }
+        optimize_existing_nextjs_project()?;
+    }
+
+    // Step 3: Create Docker configurations
+    create_enhanced_dockerignore()?;
+    create_docker_compose(&metadata.app_type)?;
+
+    // Step 4: Framework-specific optimizations
+    optimize_existing_project(&metadata.app_type)?;
+    match metadata.app_type.as_str() {
+        "react" => optimize_react_config(&mut serde_json::Value::Null)?,
+        "vue" => {
+            optimize_vue_config(&mut serde_json::Value::Null)?;
+            create_vue_files(&metadata.port)?;
+        }
+        "nextjs" => create_nextjs_optimized_config()?,
+        _ => {}
+    }
+
+    // Step 5: Initial checks and setup
     check_kubernetes_connection()?;
+    check_docker_setup()?;
     
-    // Step 2: Cleanup any old deployments
+    // Step 6: Cleanup any old deployments
     cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
 
-    // Step 3: Generate HAProxy config for load balancing
+    // Step 7: Generate HAProxy config for load balancing
     generate_haproxy_config(if is_prod { "prod" } else { "dev" })?;
 
-    // Step 4: Deploy to Kubernetes if enabled
+    // Step 8: Deploy to Kubernetes if enabled
     if metadata.kubernetes_enabled {
         println!("☸️  Deploying to Kubernetes...");
         
-        // Setup security and caching layers
-        tokio::spawn(async move {
-            if let Err(e) = setup_security_layer(
-                &metadata.app_name,
-                &metadata.kubernetes_metadata.namespace
-            ).await {
-                eprintln!("Warning: Security layer setup failed: {}", e);
-            }
-        });
-
-        tokio::spawn(async move {
-            if let Err(e) = setup_caching_layer().await {
-                eprintln!("Warning: Caching layer setup failed: {}", e);
-            }
-        });
-
-        // Setup Redis and Varnish
-        tokio::spawn(async move {
-            if let Err(e) = setup_redis_cluster().await {
-                eprintln!("Warning: Redis cluster setup failed: {}", e);
-            }
-        });
-
-        tokio::spawn(async move {
-            if let Err(e) = setup_varnish_cache().await {
-                eprintln!("Warning: Varnish cache setup failed: {}", e);
-            }
-        });
-
-        // Setup load balancing
-        tokio::spawn(async move {
-            if let Err(e) = setup_load_balancing(if is_prod { "prod" } else { "dev" }).await {
-                eprintln!("Warning: Load balancing setup failed: {}", e);
-            }
-        });
-        };
-
-        // Deploy Nginx
-        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
-
-        // Setup network policies
-        setup_network_policies(
-            &metadata.app_name,
-            &metadata.kubernetes_metadata.namespace
-        )?;
-
-        // Install NGINX Ingress Controller if needed
+        // Initialize Kubernetes environment
+        initialize_kubernetes()?;
+        
+        // Install NGINX Ingress Controller
         install_nginx_ingress()?;
         
-        // Generate Kubernetes manifests
+        // Generate and apply Kubernetes manifests
         generate_kubernetes_manifests(
             &metadata.app_name,
             &metadata.app_type,
@@ -515,45 +503,40 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
             if is_prod { "prod" } else { "dev" }
         )?;
         
-        // Apply Kubernetes manifests
         apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
         
-        // Wait for deployment to be ready
+        // Setup network policies
+        setup_network_policies(
+            &metadata.app_name,
+            &metadata.kubernetes_metadata.namespace
+        )?;
+
+        // Wait for deployment and update status
         wait_for_kubernetes_deployment(
             &metadata.kubernetes_metadata.deployment_name,
             &metadata.kubernetes_metadata.namespace
         )?;
-
-        // Store values we need before borrowing metadata
-        let app_name = metadata.app_name.clone();
         let namespace = metadata.kubernetes_metadata.namespace.clone();
-        let port = metadata.port.clone();
-        
-        // Update pod status
         update_pod_status(metadata, &namespace)?;
-        
-        // Print current Kubernetes status
-        print_kubernetes_status(&metadata);
+        print_kubernetes_status(metadata);
 
-        // Create Kubernetes ingress
+        // Create ingress
         if let Ok(ingress_host) = create_kubernetes_ingress(
-            &app_name,
-            &namespace,
-            &port,
+            &metadata.app_name,
+            &metadata.kubernetes_metadata.namespace,
+            &metadata.port,
             if is_prod { "prod" } else { "dev" }
         ) {
             metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
         }
-
-        // Setup monitoring if in production
+        // Setup monitoring and auto-scaling
         if is_prod {
-            let app_name = app_name.clone();
-            let namespace = namespace.clone();
-            let is_prod = is_prod;
+            let app_name = metadata.app_name.clone();
+            let namespace = metadata.kubernetes_metadata.namespace.clone();
             tokio::spawn(async move {
                 if let Err(e) = setup_monitoring(
                     &app_name,
-                    &namespace,
+                    &namespace, 
                     if is_prod { "prod" } else { "dev" }
                 ).await {
                     eprintln!("Warning: Monitoring setup failed: {}", e);
@@ -561,26 +544,25 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
             });
         }
 
-        // Configure auto-scaling if enabled
-        Ok(if auto_scale {
+        if auto_scale {
             setup_autoscaling(
                 &metadata.app_name,
                 &metadata.kubernetes_metadata.namespace,
                 if is_prod { 2 } else { 1 }
             )?;
-        })
+        }
     } else {
-        // Existing Docker deployment code...
         println!("🐳 Deploying with Docker...");
         let container_id = deploy_to_docker(metadata)?;
         metadata.container_id = Some(container_id);
-        Ok(()) // Add explicit return for else branch
-    };  // Add semicolon after if/else expression
+    }
 
+    // Save final state
     save_metadata(metadata)?;
     println!("✅ Deployment completed successfully!");
     Ok(())
 }
+
 fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
     println!("🐳 Deploying to Docker...");
 
@@ -2205,7 +2187,7 @@ fn validate_nextjs_project() -> io::Result<bool> {
         && required_dirs.iter().any(|d| Path::new(d).exists());
 
     // Count optional directories for optimization level
-    let optional_count = optional_dirs
+    let _optional_count = optional_dirs
         .iter()
         .filter(|d| Path::new(d).exists())
         .count();
