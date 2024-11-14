@@ -5,74 +5,51 @@ on:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-    permissions: write-all
     strategy:
-      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_name: rustify-linux-amd64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary_name: rustify-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_name: rustify-darwin-amd64
           - os: macos-latest
             target: aarch64-apple-darwin
             binary_name: rustify-darwin-arm64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary_name: rustify-windows-amd64.exe
 
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Install dependencies (Ubuntu)
-      if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y pkg-config libssl-dev
+      - uses: actions/checkout@v3
+      
+      - name: Install cross-compilation tools
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
 
-    - name: Install dependencies (macOS)
-      if: matrix.os == 'macos-latest'
-      run: |
-        brew install openssl@3
-        echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-        
-    - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        target: ${{ matrix.target }}
-        override: true
-        components: clippy, rustfmt
+      - name: Build binary
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }}
 
-    - name: Build
-      run: cargo build --release --target ${{ matrix.target }}
-
-    - name: Package Binary
-      shell: bash
-      run: |
-        cd target/${{ matrix.target }}/release
-        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-          7z a ../../../${{ matrix.binary_name }}.zip rustify.exe
-          cd ../../..
-          sha256sum ${{ matrix.binary_name }}.zip > ${{ matrix.binary_name }}.zip.sha256
-        else
-          tar -czf ../../../${{ matrix.binary_name }}.tar.gz rustify
-          cd ../../..
+      - name: Package binary
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.binary_name }}.tar.gz rustify
+          cd ../../../
           sha256sum ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
-        fi
 
-    - name: Upload Release Assets
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          ${{ matrix.binary_name }}.*
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ matrix.binary_name }}.tar.gz
+            ${{ matrix.binary_name }}.tar.gz.sha256

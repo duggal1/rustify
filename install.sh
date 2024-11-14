@@ -27,7 +27,7 @@ curl_with_retry() {
     return 1
 }
 
-# Improve Docker check
+# Add error handling for Docker installation
 check_docker() {
     if ! command -v docker &> /dev/null; then
         echo -e "${CYAN}🐳 ${BLUE}Installing Docker...${NC}"
@@ -104,10 +104,8 @@ BINARY_NAME="rustify-${OS}-${ARCH}.tar.gz"
 GITHUB_REPO="duggal1/rustify"
 LATEST_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
 
-# Get latest version dynamically
-echo -e "${CYAN}📡 Fetching latest version...${NC}"
-VERSION=$(curl_with_retry $LATEST_URL | grep '"tag_name":' | cut -d'"' -f4)
-
+# Improve version checking
+VERSION=$(curl_with_retry -s $LATEST_URL | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 if [ -z "$VERSION" ]; then
     echo -e "${RED}❌ Failed to fetch latest version${NC}"
     exit 1
