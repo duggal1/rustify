@@ -373,9 +373,27 @@ impl DockerManager {
     }
 }
 fn main() {
-    // Ensure K8S version is set
-    println!("cargo:rustc-env=K8S_OPENAPI_ENABLED_VERSION=1.26");
+    // Check for updates first
+    if let Ok(has_update) = check_for_updates() {
+        if has_update {
+            println!("🔄 New version available. Updating automatically...");
+            if let Err(e) = update_cli() {
+                eprintln!("Error during automatic update: {}", e);
+                println!("⚠️ Continuing with current version...");
+            } else {
+                println!("✅ Update successful!");
+                // Restart the CLI with the new version
+                if let Ok(current_exe) = std::env::current_exe() {
+                    let _ = Command::new(current_exe)
+                        .args(std::env::args().skip(1))
+                        .status();
+                    return;
+                }
+            }
+        }
+    }
 
+    // Continue with normal CLI operation
     let app = App::new("rustify")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Harshit Duggal")
@@ -4291,171 +4309,116 @@ fn update_cli() -> io::Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
     println!("📦 Current version: {}", current_version);
     
-    // Define platform and architecture variables
-    let platform = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    
-    // Create temporary directory
+    // Create temporary directory with better error handling
     let temp_dir = std::env::temp_dir().join("rustify_update");
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir)?;
+    }
     fs::create_dir_all(&temp_dir)?;
     
-    // Enhanced install script with feature verification
+    // Enhanced install script with better error handling
     let install_script = format!(r#"#!/bin/bash
 set -e
 
 CURRENT_VERSION="{}"
 PLATFORM="{}"
 ARCH="{}"
+BINARY_PATH=$(which rustify || echo "/usr/local/bin/rustify")
+BACKUP_PATH="${{BINARY_PATH}}.backup"
 
 echo "🔍 Checking latest version..."
 LATEST_VERSION=$(curl -s https://api.github.com/repos/duggal1/rustify/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ "$LATEST_VERSION" != "v$CURRENT_VERSION" ]; then
-    echo "📦 Downloading Rustify $LATEST_VERSION (upgrading from $CURRENT_VERSION)..."
+    echo "📦 Downloading Rustify $LATEST_VERSION..."
     
-    # Map Rust platform names to our release names
-    case "$PLATFORM" in
-        "linux")   PLATFORM_NAME="linux";;
-        "macos")   PLATFORM_NAME="darwin";;
-        "windows") PLATFORM_NAME="windows";;
-        *)        
-            echo "❌ Unsupported platform: $PLATFORM"
-            exit 1
-            ;;
+    # Map platform and architecture
+    case "$(uname -s)" in
+        "Darwin") PLATFORM_NAME="darwin";;
+        "Linux")  PLATFORM_NAME="linux";;
+        *)        echo "❌ Unsupported platform"; exit 1;;
     esac
     
-    # Map Rust arch names to our release names
-    case "$ARCH" in
+    case "$(uname -m)" in
         "x86_64") ARCH_NAME="amd64";;
-        "aarch64") ARCH_NAME="arm64";;
-        *)       
-            echo "❌ Unsupported architecture: $ARCH"
-            exit 1
-            ;;
+        "arm64")  ARCH_NAME="arm64";;
+        *)        echo "❌ Unsupported architecture"; exit 1;;
     esac
     
-    # Download new version with retry mechanism
-    BINARY_URL="https://github.com/duggal1/rustify/releases/latest/download/rustify-${PLATFORM_NAME}-${ARCH_NAME}.tar.gz"
-    echo "⬇️ Downloading from: $BINARY_URL"
+    DOWNLOAD_URL="https://github.com/duggal1/rustify/releases/latest/download/rustify-${{PLATFORM_NAME}}-${{ARCH_NAME}}.tar.gz"
+    
+    # Download with retry mechanism
     MAX_RETRIES=3
-    RETRY_COUNT=0
-    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if curl -L --fail $BINARY_URL -o rustify.tar.gz; then
+    for i in $(seq 1 $MAX_RETRIES); do
+        if curl -L -o rustify.tar.gz "$DOWNLOAD_URL"; then
             break
         fi
-        RETRY_COUNT=$((RETRY_COUNT + 1))
-        echo "⚠️ Download failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
+        if [ $i -eq $MAX_RETRIES ]; then
+            echo "❌ Download failed after $MAX_RETRIES attempts"
+            exit 1
+        fi
+        echo "⚠️ Download failed, retrying..."
         sleep 2
     done
     
-    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-        echo "❌ Failed to download after $MAX_RETRIES attempts"
+    # Verify download exists
+    if [ ! -f rustify.tar.gz ]; then
+        echo "❌ Download failed: file not found"
         exit 1
     fi
     
-    # Verify download integrity
-    echo "🔍 Verifying download integrity..."
-    if ! tar tf rustify.tar.gz &> /dev/null; then
-        echo "❌ Downloaded file is corrupted"
-        exit 1
+    # Create backup of existing installation if it exists
+    if [ -f "$BINARY_PATH" ]; then
+        echo "📑 Creating backup..."
+        sudo cp "$BINARY_PATH" "$BACKUP_PATH" || true
     fi
     
-    # Backup existing installation
-    if command -v rustify &> /dev/null; then
-        echo "📑 Backing up current installation..."
-        sudo mv $(which rustify) $(which rustify).backup
-    fi
-    
-    # Install new version
+    # Extract and install
     echo "📥 Installing new version..."
+    sudo mkdir -p /usr/local/bin
     sudo tar xzf rustify.tar.gz -C /usr/local/bin
     sudo chmod +x /usr/local/bin/rustify
     
-    # Verify installation and features
-    echo "✅ Verifying installation..."
-    NEW_VERSION=$(rustify --version)
-    if [ $? -eq 0 ]; then
-        echo "✨ Successfully updated to $NEW_VERSION"
-        
-        # Verify key features
-        echo "🔍 Verifying new features..."
-        FEATURES=(
-            "deploy"
-            "update"
-            "init"
-            "config"
-            "status"
-            "logs"
-            "scale"
-            "rollback"
-        )
-        
-        FAILED_FEATURES=0
-        for feature in "${{FEATURES[@]}}"; do
-            if rustify help $feature >/dev/null 2>&1; then
-                echo "✅ Feature verified: $feature"
-            else
-                echo "⚠️ Warning: Feature not found: $feature"
-                FAILED_FEATURES=$((FAILED_FEATURES + 1))
-            fi
-        done
-        
-        if [ $FAILED_FEATURES -eq 0 ]; then
-            echo "🎉 All features verified successfully!"
-            # Clean up backup
-            sudo rm $(which rustify).backup
-        else
-            echo "❌ Some features failed verification. Rolling back..."
-            sudo mv $(which rustify).backup $(which rustify)
-            exit 1
-        fi
-        
-        # Update completion scripts if they exist
-        if [ -d "/usr/share/bash-completion/completions" ]; then
-            rustify completion bash | sudo tee /usr/share/bash-completion/completions/rustify > /dev/null
-            echo "✅ Updated bash completion"
-        fi
-        
-        if [ -d "/usr/share/zsh/site-functions" ]; then
-            rustify completion zsh | sudo tee /usr/share/zsh/site-functions/_rustify > /dev/null
-            echo "✅ Updated zsh completion"
-        fi
-        
+    # Verify installation
+    if rustify --version >/dev/null 2>&1; then
+        echo "✅ Installation verified"
+        [ -f "$BACKUP_PATH" ] && sudo rm "$BACKUP_PATH"
     else
-        echo "❌ Update verification failed. Rolling back..."
-        sudo mv $(which rustify).backup $(which rustify)
+        echo "❌ Installation verification failed"
+        if [ -f "$BACKUP_PATH" ]; then
+            echo "⚠️ Rolling back to previous version..."
+            sudo mv "$BACKUP_PATH" "$BINARY_PATH"
+        fi
         exit 1
     fi
     
     # Cleanup
-    rm rustify.tar.gz
+    rm -f rustify.tar.gz
     echo "🎉 Update completed successfully!"
 else
     echo "✅ Already on latest version $CURRENT_VERSION"
-fi
-"#, current_version, platform, arch);
-    
-    let temp_script = temp_dir.join("update.sh");
-    fs::write(&temp_script, install_script)?;
-    
-    // Execute update script
-    println!("⚡ Executing update process...");
+fi"#, current_version, std::env::consts::OS, std::env::consts::ARCH);
+
+    // Write and execute script with proper error handling
+    let script_path = temp_dir.join("update.sh");
+    fs::write(&script_path, install_script)?;
+    fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+
     let status = Command::new("bash")
-        .arg(&temp_script)
+        .arg(&script_path)
         .status()?;
-        
+
+    // Cleanup temp directory
+    fs::remove_dir_all(&temp_dir)?;
+
     if !status.success() {
         return Err(io::Error::new(
             io::ErrorKind::Other,
-            "Update process failed"
+            "Update process failed. Please try again or update manually."
         ));
     }
-    
-    // Clean up
-    fs::remove_dir_all(temp_dir)?;
-    
-    println!("✨ Update complete! All new features are now available.");
-    println!("📚 Run 'rustify help' to see all available commands");
+
+    println!("✨ Update complete! Run 'rustify --version' to verify.");
     Ok(())
 }
 
@@ -4520,4 +4483,12 @@ fn detect_project_type() -> io::Result<String> {
     }
 
     Ok("bun".to_string()) // Default to Bun
+}
+
+fn verify_installation() -> io::Result<bool> {
+    let output = Command::new("rustify")
+        .arg("--version")
+        .output()?;
+    
+    Ok(output.status.success())
 }
