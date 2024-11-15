@@ -6,8 +6,9 @@ edition = "2021"
 description = "**An advanced CLI tool for streamlining containerization, orchestration, scaling, and server proxy**"
 
 [features]
-default = ["vendored"]
+default = ["vendored", "k8s-v1-26"]
 vendored = ["openssl-sys/vendored"]
+k8s-v1-26 = ["k8s-openapi/v1_26"]
 
 [dependencies]
 chrono = "0.4"
@@ -16,9 +17,9 @@ serde_json = "1.0"
 walkdir = "2.4.0"
 whoami = "1.4"
 colored = "2.0.4"
-tokio = { version = "1.0", features = ["full"] }
-k8s-openapi = { version = "0.18.0", features = ["v1_26"] }
-kube = { version = "0.82.0", features = ["runtime", "derive"] }
+tokio = { version = "1.36", features = ["full"] }
+k8s-openapi = { version = "0.20.0", default-features = false, features = ["v1_26"] }
+kube = { version = "0.85.0", features = ["runtime", "derive"] }
 futures = "0.3"
 parking_lot = "0.12"
 dashmap = "5.4"
@@ -28,6 +29,7 @@ syn = { version = "2.0", features = ["full"] }
 clap = "3.2"
 openssl = "0.10"
 openssl-sys = "0.9"
+async-trait = "0.1"
 
 [profile.release]
 opt-level = 3

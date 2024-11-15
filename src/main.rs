@@ -293,19 +293,29 @@ impl DockerManager {
     }
 
     fn check_docker_setup(&self) -> io::Result<()> {
-        match Command::new("docker").arg("--version").output() {
-            Ok(_) => {
-                println!("✅ Docker is installed");
-                Ok(())
+        println!("🐳 Checking Docker setup...");
+        
+        // Check if Docker Desktop is installed and running
+        match Command::new("docker").arg("info").output() {
+            Ok(output) => {
+                if output.status.success() {
+                    println!("✅ Docker Desktop is running");
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Docker Desktop is installed but not running. Please start Docker Desktop."
+                    ));
+                }
             }
             Err(_) => {
-                println!("❌ Docker not found. Installing Docker...");
-                self.install_docker()?;
-                println!("⏳ Starting Docker for first time...");
-                self.start_docker()?;
-                Ok(())
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "Docker Desktop is not installed. Please install Docker Desktop first."
+                ));
             }
         }
+
+        Ok(())
     }
 
     fn handle_docker_setup(&self) -> io::Result<()> {
@@ -363,21 +373,25 @@ impl DockerManager {
     }
 }
 fn main() {
-    // Add automatic version check at startup
-    if let Ok(has_update) = check_for_updates() {
-        if has_update {
-            println!("🔄 New version available. Updating automatically...");
-            if let Err(e) = update_cli() {
-                eprintln!("Error during automatic update: {}", e);
-                // Continue with current version
-            }
-        }
-    }
+    // Ensure K8S version is set
+    println!("cargo:rustc-env=K8S_OPENAPI_ENABLED_VERSION=1.26");
 
     let app = App::new("rustify")
-        .version("2.0.6")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Harshit Duggal")
         .about("🚀 Highly optimized deployment CLI")
+        .subcommand(
+            SubCommand::with_name("init")
+                .about("Initialize a new project")
+                .arg(
+                    Arg::with_name("type")
+                        .long("type")
+                        .value_name("TYPE")
+                        .help("Project type (next, react, vue, svelte, astro, remix, mern)")
+                        .required(true)
+                        .possible_values(&["next", "react", "vue", "svelte", "astro", "remix", "mern"])
+                )
+        )
         .subcommand(
             SubCommand::with_name("update")
                 .about("Update rustify to the latest version")
@@ -415,73 +429,52 @@ fn main() {
         .get_matches();
 
     match app.subcommand() {
-        Some(("update", sub_m)) => {
-            if sub_m.is_present("init") {
-                println!("🚀 Initiating instant update...");
-                if let Err(e) = update_cli() {
-                    eprintln!("Error during update: {}", e);
+        Some(("init", sub_m)) => {
+            let project_type = sub_m.value_of("type").unwrap();
+            println!("🚀 Initializing new {} project...", project_type);
+            
+            match initialize_project(project_type) {
+                Ok(_) => println!("✅ Project initialized successfully!"),
+                Err(e) => {
+                    eprintln!("❌ Error initializing project: {}", e);
                     std::process::exit(1);
                 }
-                println!("✅ Update completed successfully!");
-                return;
             }
         }
-        Some(("deploy", matches)) => {
-            // Check for updates before deployment
-            println!("🔍 Checking for available updates...");
+        Some(("deploy", sub_m)) => {
+            // First check for updates
             if let Ok(has_update) = check_for_updates() {
                 if has_update {
-                    println!("📦 New version available! Run 'rustify update --init' to update instantly.");
+                    println!("📦 Update available! Run 'rustify update --init' to update");
                 }
             }
 
-            let is_prod = matches.is_present("prod");
-            let port = matches.value_of("port").unwrap_or("8000");
-            let auto_scale = matches.is_present("rpl");
-            let cleanup = matches.is_present("cleanup");
-
+            let is_prod = sub_m.is_present("prod");
+            let port = sub_m.value_of("port").unwrap_or("3000");
+            let auto_scale = sub_m.is_present("rpl");
+            
             let mut metadata = AppMetadata {
-                app_name: "app".to_string(),
-                app_type: "bun".to_string(),
+                app_name: detect_app_name()?,
+                app_type: detect_project_type()?,
                 port: port.to_string(),
                 created_at: Local::now().to_rfc3339(),
                 container_id: None,
-                _status: String::from("pending"),
+                _status: "pending".to_string(),
                 kubernetes_enabled: is_prod,
-                kubernetes_metadata: KubernetesMetadata {
-                    namespace: if is_prod { "production" } else { "development" }.to_string(),
-                    deployment_name: "app-deployment".to_string(),
-                    service_name: "app-service".to_string(),
-                    replicas: if auto_scale { 3 } else { 1 },
-                    pod_status: vec![],
-                    ingress_host: None,
-                },
+                kubernetes_metadata: KubernetesMetadata::default(),
                 performance_metrics: PerformanceMetrics::default(),
                 scaling_config: ScalingConfig::default(),
             };
 
-            // Perform cleanup if requested
-            if cleanup {
-                if let Err(e) = cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace) {
-                    eprintln!("Warning: Cleanup failed: {}", e);
-                }
-            }
-
             if let Err(e) = deploy_application(&mut metadata, is_prod, auto_scale) {
-                eprintln!("Error: {}", e);
+                eprintln!("❌ Deployment failed: {}", e);
                 std::process::exit(1);
             }
         }
         _ => {
-            println!("Usage:");
-            println!("  rustify deploy [--prod] [--port <port>] [--rpl] [--cleanup]");
+            println!("No command specified. Use --help for usage information.");
+            std::process::exit(1);
         }
-    }
-
-    // Verify Docker installation
-    if let Err(e) = verify_docker_installation() {
-        eprintln!("Error verifying Docker installation: {}", e);
-        std::process::exit(1);
     }
 }
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
@@ -949,7 +942,7 @@ fn apply_kubernetes_manifests(namespace: &str) -> io::Result<()> {
         .output()?;
 
     Ok(())
-}
+     }
 fn wait_for_kubernetes_deployment(deployment_name: &str, namespace: &str) -> io::Result<()> {
     println!("⏳ Waiting for deployment to be ready...");
 
@@ -1515,7 +1508,7 @@ fn check_kubernetes_status() -> io::Result<()> {
                 if let Ok(components) = Command::new("kubectl")
                     .args(["get", "componentstatuses", "-o", "wide"])
                     .output()
-                {
+                 {
                     println!("\nComponent Status:");
                     println!("{}", String::from_utf8_lossy(&components.stdout));
                 }
@@ -1796,30 +1789,72 @@ fn default_max_instances() -> u32 {
 }
 
 fn initialize_project(project_type: &str) -> io::Result<()> {
-    println!("{}", GradientText::cyber("🚀 Initializing project..."));
-
-    // Create necessary directories
-    fs::create_dir_all("src")?;
-
-    // Create app files based on project type
-    create_app_files(project_type, "3000")?;
-
-    // Initialize git if not already initialized
-    if !Path::new(".git").exists() {
-        Command::new("git").args(["init"]).output()?;
-
-        // Create default .gitignore
-        let gitignore = r#"node_modules/
-dist/
-.env
-.DS_Store"#;
-        fs::write(".gitignore", gitignore)?;
+    // Verify directory is empty or create new
+    if !Path::new(".").read_dir()?.next().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Directory is not empty. Please use an empty directory."
+        ));
     }
 
-    println!(
-        "{}",
-        GradientText::success("✅ Project initialized successfully!")
-    );
+    match project_type {
+        "next" => {
+            Command::new("npx")
+                .args(["create-next-app", ".", "--typescript", "--tailwind"])
+                .status()?;
+            optimize_existing_nextjs_project()?;
+        }
+        "react" => {
+            Command::new("npx")
+                .args(["create-react-app", ".", "--template", "typescript"])
+                .status()?;
+        }
+        "vue" => {
+            Command::new("npm")
+                .args(["create", "vue@latest", "."])
+                .status()?;
+        }
+        "svelte" => {
+            Command::new("npm")
+                .args(["create", "svelte@latest", "."])
+                .status()?;
+        }
+        "astro" => {
+            Command::new("npm")
+                .args(["create", "astro@latest", "."])
+                .status()?;
+        }
+        "remix" => {
+            Command::new("npx")
+                .args(["create-remix", "."])
+                .status()?;
+        }
+        "mern" => {
+            // Initialize both frontend and backend
+            fs::create_dir_all("client")?;
+            fs::create_dir_all("server")?;
+            
+            // Initialize React frontend
+            Command::new("npx")
+                .current_dir("client")
+                .args(["create-react-app", ".", "--template", "typescript"])
+                .status()?;
+                
+            // Initialize Express backend
+            Command::new("npm")
+                .current_dir("server")
+                .args(["init", "-y"])
+                .status()?;
+        }
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Unsupported project type: {}", project_type)
+            ));
+        }
+    }
+
+    println!("✅ Project initialized successfully!");
     Ok(())
 }
 
@@ -3717,34 +3752,42 @@ fn create_optimization_configs(app_type: &str) -> io::Result<()> {
 
 fn check_docker_setup() -> io::Result<()> {
     println!("🐳 Checking Docker setup...");
-    // Check if Docker is installed and running
-    let docker_status = Command::new("docker")
-        .arg("info")
-        .output()
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "Docker not found or not running"))?;
-
-    if !docker_status.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Docker is not running",
-        ));
+    
+    // Check if Docker Desktop is installed and running
+    match Command::new("docker").arg("info").output() {
+        Ok(output) => {
+            if output.status.success() {
+                println!("✅ Docker Desktop is running");
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Docker Desktop is installed but not running. Please start Docker Desktop."
+                ));
+            }
+        }
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Docker Desktop is not installed. Please install Docker Desktop first."
+            ));
+        }
     }
 
-    println!("✅ Docker is properly configured");
     Ok(())
 }
 
 fn initialize_kubernetes() -> io::Result<()> {
     println!("🚀 Initializing Kubernetes environment...");
 
-    // Step 1: Check connection and setup
+    // Check Docker Desktop and Kubernetes status
     check_kubernetes_connection()?;
+    verify_kubernetes_setup()?;
 
-    // Step 2: Create namespaces
+    // Create necessary namespaces
     let namespaces = ["default", "monitoring", "ingress-nginx"];
     for namespace in namespaces.iter() {
         println!("📦 Creating namespace: {}", namespace);
-        let create_output = Command::new("kubectl")
+        Command::new("kubectl")
             .args([
                 "create",
                 "namespace",
@@ -3754,54 +3797,39 @@ fn initialize_kubernetes() -> io::Result<()> {
                 "yaml",
             ])
             .output()?;
-
-        if !create_output.status.success() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Failed to create namespace: {}", namespace),
-            ));
-        }
     }
 
-    // Step 3: Install and configure NGINX Ingress
-    install_nginx_ingress()?;
-
-    // Step 4: Wait for Ingress Controller
-    println!("⏳ Waiting for NGINX Ingress Controller...");
-    let wait_output = Command::new("kubectl")
-        .args([
-            "wait",
-            "--namespace",
-            "ingress-nginx",
-            "--for=condition=ready",
-            "pod",
-            "--selector=app.kubernetes.io/component=controller",
-            "--timeout=300s",
-        ])
-        .output()?;
-
-    if !wait_output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Timeout waiting for NGINX Ingress Controller",
-        ));
-    }
-
-    // Step 5: Install Metrics Server
-    println!("📊 Installing Metrics Server...");
-    let metrics_output = Command::new("kubectl")
+    // Install NGINX Ingress Controller
+    println!("📦 Installing NGINX Ingress Controller...");
+    Command::new("kubectl")
         .args([
             "apply",
             "-f",
-            "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
+            "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml",
         ])
         .output()?;
 
-    if !metrics_output.status.success() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "Failed to install Metrics Server",
-        ));
+    // Wait for Ingress Controller to be ready
+    println!("⏳ Waiting for NGINX Ingress Controller...");
+    for _ in 0..30 {
+        let status = Command::new("kubectl")
+            .args([
+                "get",
+                "pods",
+                "-n",
+                "ingress-nginx",
+                "-l",
+                "app.kubernetes.io/component=controller",
+                "-o",
+                "jsonpath='{.items[0].status.phase}'",
+            ])
+            .output()?;
+
+        if String::from_utf8_lossy(&status.stdout).contains("Running") {
+            println!("✅ NGINX Ingress Controller is ready");
+            break;
+        }
+        thread::sleep(Duration::from_secs(2));
     }
 
     println!("✅ Kubernetes environment initialized successfully!");
@@ -4135,7 +4163,7 @@ fn deploy_with_docker(metadata: &AppMetadata) -> io::Result<()> {
 }
 
 fn setup_horizontal_pod_autoscaler(app_name: &str, namespace: &str) -> io::Result<()> {
-  println!("⚖️  Setting up Horizontal Pod Autoscaler...");
+  println!("️  Setting up Horizontal Pod Autoscaler...");
 
   // Create HPA manifest
   let hpa_manifest = format!(
@@ -4307,9 +4335,8 @@ if [ "$LATEST_VERSION" != "v$CURRENT_VERSION" ]; then
     esac
     
     # Download new version with retry mechanism
-    BINARY_URL="https://github.com/duggal1/rustify/releases/latest/download/rustify-${{PLATFORM_NAME}}-${{ARCH_NAME}}.tar.gz"
+    BINARY_URL="https://github.com/duggal1/rustify/releases/latest/download/rustify-${PLATFORM_NAME}-${ARCH_NAME}.tar.gz"
     echo "⬇️ Downloading from: $BINARY_URL"
-    
     MAX_RETRIES=3
     RETRY_COUNT=0
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
@@ -4459,4 +4486,38 @@ fn check_for_updates() -> io::Result<bool> {
     }
     
     Ok(false)
+}
+
+fn detect_project_type() -> io::Result<String> {
+    if Path::new("package.json").exists() {
+        let content = fs::read_to_string("package.json")?;
+        let pkg: serde_json::Value = serde_json::from_str(&content)?;
+
+        if let Some(deps) = pkg.get("dependencies") {
+            if deps.get("next").is_some() {
+                return Ok("next".to_string());
+            } else if deps.get("react").is_some() {
+                return Ok("react".to_string());
+            } else if deps.get("vue").is_some() {
+                return Ok("vue".to_string());
+            } else if deps.get("svelte").is_some() {
+                return Ok("svelte".to_string());
+            } else if deps.get("astro").is_some() {
+                return Ok("astro".to_string());
+            } else if deps.get("@remix-run/react").is_some() {
+                return Ok("remix".to_string());
+            }
+        }
+    }
+
+    // Check for specific framework files
+    if Path::new("next.config.js").exists() {
+        return Ok("next".to_string());
+    } else if Path::new("vite.config.js").exists() && Path::new("svelte.config.js").exists() {
+        return Ok("svelte".to_string());
+    } else if Path::new("astro.config.mjs").exists() {
+        return Ok("astro".to_string());
+    }
+
+    Ok("bun".to_string()) // Default to Bun
 }
