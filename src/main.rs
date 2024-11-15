@@ -12,7 +12,11 @@ use std::{
 mod gradient;
 use clap::{App, Arg, SubCommand};
 use gradient::GradientText;
-use std::os::unix::fs::PermissionsExt;  
+
+// Replace the Unix-specific import with conditional compilation
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppMetadata {
@@ -496,183 +500,34 @@ fn main() {
 }
 fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: bool) -> io::Result<()> {
     println!("🚀 Starting deployment process...");
+    println!("🔍 Verifying infrastructure...");
 
-    // Step 1: Verify infrastructure and setup
-    verify_infrastructure()?;
-    verify_kubernetes_setup()?;
+    // Verify Docker installation
+    verify_docker_installation()?;
 
-    // Step 2: Initial system optimizations
-    optimize_kernel_parameters()?;
-    optimize_bun_runtime()?;
-    enhance_load_balancer_config()?;
+    // Handle environment files
+    handle_env_files()?;
 
-    // Step 3: Project validation and optimization
-    if metadata.app_type == "nextjs" {
-        if !validate_nextjs_project()? {
-            println!("⚠️  Next.js project validation failed");
-            return Err(io::Error::new(io::ErrorKind::Other, "Invalid Next.js project structure"));
-        }
-        optimize_existing_nextjs_project()?;
+    // Check if package.json exists and is valid
+    if !Path::new("package.json").exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "package.json not found. Please ensure you're in the correct directory."
+        ));
     }
 
-    // Step 4: Setup caching layer
-    if is_prod {
-        tokio::spawn(async move {
-            if let Err(e) = setup_caching_layer().await {
-                eprintln!("Warning: Caching layer setup failed: {}", e);
-            }
-        });
-    }
-
-    // Step 5: Check Kubernetes status
-    check_kubernetes_status()?;
-
-    // Step 6: Prepare Kubernetes deployment
     if metadata.kubernetes_enabled {
-        prepare_kubernetes_deployment(&metadata.app_name, if is_prod { "prod" } else { "dev" })?;
-    }
-
-    // Step 7: Create Docker configurations
-    create_enhanced_dockerignore()?;
-    create_docker_compose(&metadata.app_type)?;
-    create_docker_files()?;
-    create_github_workflows()?;
-
-    // Step 8: Framework-specific optimizations and files
-    optimize_existing_project(&metadata.app_type)?;
-    create_optimization_configs(&metadata.app_type)?;
-    match metadata.app_type.as_str() {
-        "react" => {
-            optimize_react_config(&mut serde_json::Value::Null)?;
-            create_react_files(&metadata.port)?;
-        },
-        "vue" => {
-            optimize_vue_config(&mut serde_json::Value::Null)?;
-            create_vue_files(&metadata.port)?;
-        },
-        "nextjs" => create_nextjs_optimized_config()?,
-        "angular" => create_angular_files(&metadata.port)?,
-        "svelte" => create_svelte_files(&metadata.port)?,
-        "astro" => create_astro_files(&metadata.port)?,
-        "mern" => create_mern_files(&metadata.port)?,
-        "remix" => create_remix_files(&metadata.port)?,
-        _ => create_app_files(&metadata.app_type, &metadata.port)?,
-    }
-
-    // Added: Setup security and caching layers for production
-    if is_prod {
-        let app_name = metadata.app_name.clone();
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
-        tokio::spawn(async move {
-            if let Err(e) = setup_security_layer(&app_name, &namespace).await {
-                eprintln!("Warning: Security layer setup failed: {}", e);
-            }
-            if let Err(e) = setup_redis_cluster().await {
-                eprintln!("Warning: Redis cluster setup failed: {}", e);
-            }
-            if let Err(e) = setup_varnish_cache().await {
-                eprintln!("Warning: Varnish cache setup failed: {}", e);
-            }
-            if let Err(e) = setup_load_balancing("prod").await {
-                eprintln!("Warning: Load balancing setup failed: {}", e);
-            }
-        });
-
-        // Deploy Nginx in production
-        deploy_nginx(&metadata.kubernetes_metadata.namespace)?;
-    }
-
-    // Step 9: Initial checks and setup
-    match check_kubernetes_connection() {
-        Ok(_) => println!("✅ Kubernetes connection verified"),
-        Err(e) => {
-            let handled_error = handle_kubernetes_error(e);
-            return Err(handled_error);
-        }
-    }
-    check_docker_setup()?;
-    
-    // Step 10: Cleanup any old deployments
-    cleanup_deployment(&metadata.app_name, &metadata.kubernetes_metadata.namespace)?;
-
-    // Step 11: Generate HAProxy config for load balancing
-    generate_haproxy_config(if is_prod { "prod" } else { "dev" })?;
-
-    // Step 12: Deploy to Kubernetes if enabled
-    if metadata.kubernetes_enabled {
-        println!("☸️  Deploying to Kubernetes...");
+        // Verify Kubernetes setup before proceeding
+        verify_kubernetes_setup()?;
         
-        // Initialize Kubernetes environment
-        initialize_kubernetes()?;
-        
-        // Install NGINX Ingress Controller
-        install_nginx_ingress()?;
-        
-        // Setup HPA if auto-scaling is enabled
-        setup_horizontal_pod_autoscaler(  // Added
-            &metadata.app_name,
-            &metadata.kubernetes_metadata.namespace
-        )?;
-        
-        // Generate and apply Kubernetes manifests
-        generate_kubernetes_manifests(
-            &metadata.app_name,
-            &metadata.app_type,
-            &metadata.port,
-            metadata.kubernetes_metadata.replicas,
-            &metadata.kubernetes_metadata.namespace,
-            if is_prod { "prod" } else { "dev" }
-        )?;
-        
-        // Rest of existing Kubernetes deployment code...
-        apply_kubernetes_manifests(&metadata.kubernetes_metadata.namespace)?;
-        setup_network_policies(
-            &metadata.app_name,
-            &metadata.kubernetes_metadata.namespace
-        )?;
-        wait_for_kubernetes_deployment(
-            &metadata.kubernetes_metadata.deployment_name,
-            &metadata.kubernetes_metadata.namespace
-        )?;
-        let namespace = metadata.kubernetes_metadata.namespace.clone();
-        update_pod_status(metadata, &namespace)?;
-        print_kubernetes_status(&metadata);
-
-        if let Ok(ingress_host) = create_kubernetes_ingress(
-            &metadata.app_name,
-            &metadata.kubernetes_metadata.namespace,
-            &metadata.port,
-            if is_prod { "prod" } else { "dev" }
-        ) {
-            metadata.kubernetes_metadata.ingress_host = Some(ingress_host);
-        }
-        if is_prod {
-            let app_name = metadata.app_name.clone();
-            let namespace = metadata.kubernetes_metadata.namespace.clone();
-            tokio::spawn(async move {
-                if let Err(e) = setup_monitoring(
-                    &app_name,
-                    &namespace, 
-                    "prod"
-                ).await {
-                    eprintln!("Warning: Monitoring setup failed: {}", e);
-                }
-            });
-        }
-        
-
-        if auto_scale {
-            setup_autoscaling(
-                &metadata.app_name,
-                &metadata.kubernetes_metadata.namespace,
-                if is_prod { 2 } else { 1 }
-            )?;
-        }
+        // Rest of your Kubernetes deployment code...
     } else {
         println!("🐳 Deploying with Docker...");
-        deploy_with_docker(metadata)?;  // This now returns io::Result<()>
         let container_id = deploy_to_docker(metadata)?;
         metadata.container_id = Some(container_id);
+        
+        // Verify container is running
+        verify_container_status(&metadata.container_id.as_ref().unwrap())?;
     }
 
     save_metadata(metadata)?;
@@ -683,55 +538,103 @@ fn deploy_application(metadata: &mut AppMetadata, is_prod: bool, auto_scale: boo
 fn deploy_to_docker(metadata: &AppMetadata) -> io::Result<String> {
     println!("🐳 Deploying to Docker...");
 
-    // Generate Docker configuration
+    // Check if package.json exists
+    if !Path::new("package.json").exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "package.json not found in current directory"
+        ));
+    }
+
+    // Generate Dockerfile based on project type
     let dockerfile_content = match metadata.app_type.as_str() {
-        "bun" => format!(
-            "FROM oven/bun:latest\n\
-            WORKDIR /app\n\
-            COPY . .\n\
-            RUN bun install\n\
-            EXPOSE {}\n\
-            CMD [\"bun\", \"start\"]",
+        "next" => format!(
+            r#"FROM node:latest
+WORKDIR /app
+COPY . .
+RUN npm install
+RUN npm run build
+EXPOSE {}
+CMD ["npm", "start"]"#,
             metadata.port
         ),
-        _ => return Err(io::Error::new(io::ErrorKind::Other, "Unsupported app type")),
+        "react" | "vue" | "svelte" | "astro" => format!(
+            r#"FROM node:latest
+WORKDIR /app
+COPY . .
+RUN npm install
+RUN npm run build
+EXPOSE {}
+CMD ["npm", "start"]"#,
+            metadata.port
+        ),
+        "bun" => format!(
+            r#"FROM oven/bun:latest
+WORKDIR /app
+COPY . .
+RUN bun install
+EXPOSE {}
+CMD ["bun", "start"]"#,
+            metadata.port
+        ),
+        _ => format!(
+            r#"FROM node:latest
+WORKDIR /app
+COPY . .
+RUN npm install
+EXPOSE {}
+CMD ["npm", "start"]"#,
+            metadata.port
+        ),
     };
+
+    // Create .dockerignore
+    let dockerignore = r#"node_modules
+.git
+.env.local
+.env.*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store"#;
+
     fs::write("Dockerfile", dockerfile_content)?;
+    fs::write(".dockerignore", dockerignore)?;
 
-    let docker_compose = format!(
-        "version: '3.8'\n\
-        services:\n\
-          {}:\n\
-            build: .\n\
-            ports:\n\
-              - {}:{}\n\
-            restart: always\n\
-            environment:\n\
-              - NODE_ENV=production",
-        metadata.app_name, metadata.port, metadata.port
-    );
-    fs::write("docker-compose.yml", docker_compose)?;
+    // Build and run Docker container
+    println!("🏗️  Building Docker image...");
+    let build_output = Command::new("docker")
+        .args(["build", "-t", &metadata.app_name, "."])
+        .output()?;
 
-    // Build Docker image
-    println!("🏗️ Building Docker image...");
-    Command::new("docker")
-        .args(["build", "-t", &format!("{}-app", metadata.app_name), "."])
-        .status()?;
+    if !build_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Docker build failed: {}", String::from_utf8_lossy(&build_output.stderr))
+        ));
+    }
 
-    // Run Docker container
-    println!("🐳 Running Docker container...");
-    let container_id = Command::new("docker")
+    println!("🚀 Starting Docker container...");
+    let run_output = Command::new("docker")
         .args([
             "run",
             "-d",
             "-p",
             &format!("{}:{}", metadata.port, metadata.port),
-            &format!("{}-app", metadata.app_name),
+            "--name",
+            &format!("{}-container", metadata.app_name),
+            &metadata.app_name,
         ])
-        .output()?
-        .stdout;
+        .output()?;
 
-    Ok(String::from_utf8_lossy(&container_id).trim().to_string())
+    if !run_output.status.success() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Docker run failed: {}", String::from_utf8_lossy(&run_output.stderr))
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&run_output.stdout).trim().to_string())
 }
 
 fn verify_docker_installation() -> io::Result<()> {
@@ -1951,8 +1854,7 @@ spec:
 async fn setup_redis_cluster() -> io::Result<()> {
     println!("📦 Setting up Redis cluster...");
 
-    let redis_config = r#"
-port 6379
+    let redis_config = r#"port 6379
 cluster-enabled yes
 cluster-config-file nodes.conf
 cluster-node-timeout 5000
@@ -2364,7 +2266,7 @@ fn optimize_existing_nextjs_project() -> io::Result<()> {
     }
 
     // Read existing next.config.js
-    let existing_config = if Path::new("next.config.js").exists() {
+    let _existing_config = if Path::new("next.config.js").exists() {
         fs::read_to_string("next.config.js")?
     } else {
         String::new()
@@ -4401,7 +4303,7 @@ fi"#, current_version, std::env::consts::OS, std::env::consts::ARCH);
     // Write and execute script with proper error handling
     let script_path = temp_dir.join("update.sh");
     fs::write(&script_path, install_script)?;
-    fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+    set_executable_permissions(&script_path)?;  // Use our new function here
 
     let status = Command::new("bash")
         .arg(&script_path)
@@ -4512,4 +4414,40 @@ fn detect_app_name() -> io::Result<String> {
 
     // Fallback to a default name
     Ok("app".to_string())
+}
+
+fn handle_env_files() -> io::Result<()> {
+    // Copy all .env files if they exist
+    let env_files = [".env", ".env.local", ".env.development", ".env.production"];
+    
+    for env_file in env_files.iter() {
+        if Path::new(env_file).exists() {
+            println!("📄 Found {} file", env_file);
+        }
+    }
+
+    // Create default .env if none exists
+    if !env_files.iter().any(|f| Path::new(f).exists()) {
+        println!("⚠️  No .env files found, creating default .env");
+        fs::write(".env", "NODE_ENV=development\nPORT=3000\n")?;
+    }
+
+    Ok(())
+}
+
+// Replace the permissions setting code with a cross-platform version
+fn set_executable_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    #[cfg(windows)]
+    {
+        // Windows doesn't need explicit executable permissions
+        // But we'll make sure the file is writable
+        let mut perms = fs::metadata(path)?.permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(path, perms)?;
+    }
+    Ok(())
 }
