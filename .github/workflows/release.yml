@@ -45,13 +45,12 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_name: rustify-windows-amd64
             cross: false
-
     steps:
       - uses: actions/checkout@v4
 
       # Cache dependencies
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v2
         with:
           path: |
             ~/.cargo/registry
