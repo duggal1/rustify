@@ -47,7 +47,7 @@ jobs:
             cross: false
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       # Cache dependencies
       - name: Cache dependencies
@@ -58,6 +58,12 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Install Rust
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       # Windows-specific setup
       - name: Setup Windows dependencies
@@ -104,35 +110,18 @@ jobs:
             echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
           fi
 
-      # Install Rust toolchain
-      - name: Setup Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
-          override: true
-
-      # Install cross for ARM64 Linux build
-      - name: Install cross
-        if: matrix.cross
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          echo "CARGO_BUILD_TARGET=${{ matrix.target }}" >> $GITHUB_ENV
-
       # Build binary
       - name: Build Release Binary
         if: ${{ !matrix.cross }}
-        uses: actions-rs/cargo@v1
+        run: cargo build --release --target ${{ matrix.target }}
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
 
       # Build binary with cross
       - name: Build Release Binary (Cross)
         if: matrix.cross
         run: |
+          cargo install cross --git https://github.com/cross-rs/cross
           cross build --release --target ${{ matrix.target }}
 
       # Package binaries
@@ -146,21 +135,17 @@ jobs:
           $hash = Get-FileHash ${{ matrix.binary_name }}.zip -Algorithm SHA256
           $hash.Hash > ${{ matrix.binary_name }}.zip.sha256
 
-      - name: Package Binary (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Package Binary (Unix)
+        if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.binary_name }}.tar.gz rustify
           cd ../../../
-          shasum -a 256 ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
-
-      - name: Package Binary (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../${{ matrix.binary_name }}.tar.gz rustify
-          cd ../../../
-          sha256sum ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 256 ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
+          else
+            sha256sum ${{ matrix.binary_name }}.tar.gz > ${{ matrix.binary_name }}.tar.gz.sha256
+          fi
 
       # Upload to release
       - name: Upload Release Assets
