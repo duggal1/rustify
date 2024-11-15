@@ -12,7 +12,7 @@ use std::{
 mod gradient;
 use clap::{App, Arg, SubCommand};
 use gradient::GradientText;
-
+use std::os::unix::fs::PermissionsExt;  
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppMetadata {
@@ -470,10 +470,9 @@ fn main() {
             let is_prod = sub_m.is_present("prod");
             let port = sub_m.value_of("port").unwrap_or("3000");
             let auto_scale = sub_m.is_present("rpl");
-            
             let mut metadata = AppMetadata {
-                app_name: detect_app_name()?,
-                app_type: detect_project_type()?,
+                app_name: detect_app_name().unwrap_or_else(|_| "unknown".to_string()),
+                app_type: detect_project_type().unwrap_or_else(|_| "unknown".to_string()),
                 port: port.to_string(),
                 created_at: Local::now().to_rfc3339(),
                 container_id: None,
@@ -4491,4 +4490,26 @@ fn verify_installation() -> io::Result<bool> {
         .output()?;
     
     Ok(output.status.success())
+}
+
+fn detect_app_name() -> io::Result<String> {
+    // First try to get name from package.json
+    if Path::new("package.json").exists() {
+        let content = fs::read_to_string("package.json")?;
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(name) = json["name"].as_str() {
+                return Ok(name.to_string());
+            }
+        }
+    }
+
+    // If package.json doesn't exist or doesn't have a name, use directory name
+    if let Some(dir_name) = std::env::current_dir()?.file_name() {
+        if let Some(name) = dir_name.to_str() {
+            return Ok(name.to_string());
+        }
+    }
+
+    // Fallback to a default name
+    Ok("app".to_string())
 }
